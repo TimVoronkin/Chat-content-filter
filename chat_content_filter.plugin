@@ -7,7 +7,23 @@ from ui.settings import Header, Switch, Divider
 
 from java import dynamic_proxy
 from android.widget import CompoundButton, LinearLayout, ScrollView, TextView, Switch as AndroidSwitch
-from android.view import View
+from android.view import View, MotionEvent
+
+try:
+    from org.telegram.messenger import AndroidUtilities
+except Exception:
+    AndroidUtilities = find_class("org.telegram.messenger.AndroidUtilities")
+
+try:
+    from android.view import HapticFeedbackConstants
+except Exception:
+    HapticFeedbackConstants = None
+
+try:
+    from android.view import ViewConfiguration
+    DEFAULT_LONG_PRESS_TIMEOUT = ViewConfiguration.getLongPressTimeout()
+except Exception:
+    DEFAULT_LONG_PRESS_TIMEOUT = 500
 
 try:
     from android_utils import OnLongClickListener
@@ -27,7 +43,7 @@ __id__ = "chat_content_filter"
 __name__ = "Chat Content Filter"
 __description__ = "Filter specific message types in chats with a header button and interactive toggles."
 __author__ = "Personal edition"
-__version__ = "4.3.0"
+__version__ = "4.3.1"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "12.5.1"
 __sdk_version__ = ">=1.4.3.3"
@@ -73,6 +89,24 @@ def _set_zero_dimensions(view):
         return False
 
 
+class LongPressRunnable(dynamic_proxy(find_class("java.lang.Runnable"))):
+    def __init__(self, touch_listener, view, plugin, fragment):
+        super().__init__()
+        self.touch_listener = touch_listener
+        self.view = view
+        self.plugin = plugin
+        self.fragment = fragment
+
+    def run(self):
+        self.touch_listener.long_pressed = True
+        try:
+            if HapticFeedbackConstants is not None:
+                self.view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        except Exception:
+            pass
+        self.plugin.open_filter_dialog(self.fragment)
+
+
 class HeaderTouchListener(dynamic_proxy(find_class("android.view.View$OnTouchListener"))):
     """Handles both short tap (toggle) and long press (open dialog) on the header button."""
     def __init__(self, plugin, fragment):
@@ -81,36 +115,20 @@ class HeaderTouchListener(dynamic_proxy(find_class("android.view.View$OnTouchLis
         self.fragment = fragment
         self.long_press_runnable = None
         self.long_pressed = False
+        self.timeout = DEFAULT_LONG_PRESS_TIMEOUT
 
     def onTouch(self, view, event):
         try:
-            from android.view import MotionEvent
             action = event.getAction()
 
             if action == MotionEvent.ACTION_DOWN:
                 self.long_pressed = False
-                plugin = self.plugin
-                frag = self.fragment
-
-                class LongPressRunnable(dynamic_proxy(find_class("java.lang.Runnable"))):
-                    def __init__(inner_self):
-                        super().__init__()
-
-                    def run(inner_self):
-                        self.long_pressed = True
-                        try:
-                            from android.view import HapticFeedbackConstants
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                        except Exception:
-                            pass
-                        plugin.open_filter_dialog(frag)
-
-                self.long_press_runnable = LongPressRunnable()
-                view.postDelayed(self.long_press_runnable, 400)
+                self.long_press_runnable = LongPressRunnable(self, view, self.plugin, self.fragment)
+                view.postDelayed(self.long_press_runnable, self.timeout)
                 return False
 
             elif action in (MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL):
-                if self.long_press_runnable:
+                if self.long_press_runnable is not None:
                     view.removeCallbacks(self.long_press_runnable)
                     self.long_press_runnable = None
 
@@ -392,10 +410,9 @@ class ChatContentFilterPlugin(BasePlugin):
 
             from android.graphics import Bitmap, Canvas, Paint, Matrix
             from android.graphics.drawable import BitmapDrawable
-            from org.telegram.messenger import AndroidUtilities
             from org.telegram.ui.ActionBar import Theme
 
-            size_dp = AndroidUtilities.dp(24)
+            size_dp = AndroidUtilities.dp(24) if AndroidUtilities else 72
             if size_dp <= 0:
                 size_dp = 72
 
@@ -487,7 +504,7 @@ class ChatContentFilterPlugin(BasePlugin):
         if not cell:
             return
         try:
-            from android.view import View, ViewGroup
+            from android.view import ViewGroup
 
             if not self.get_setting("plugin_enabled", True):
                 if cell.getVisibility() != View.VISIBLE:
@@ -569,14 +586,14 @@ class ChatContentFilterPlugin(BasePlugin):
                 return
 
             activity = fragment.getParentActivity()
-            from org.telegram.messenger import AndroidUtilities
 
             is_enabled = bool(self.get_setting("plugin_enabled", True))
             path_data = PATH_VISIBILITY_OFF if is_enabled else PATH_VISIBILITY_ON
             drawable = self.create_vector_drawable(activity, path_data)
             fallback_icon = self.find_filter_icon_id(activity) or 0
 
-            item = menu.addItemWithWidth(FILTER_HEADER_ID, fallback_icon, AndroidUtilities.dp(48), "Filter Messages")
+            width_dp = AndroidUtilities.dp(48) if AndroidUtilities else 144
+            item = menu.addItemWithWidth(FILTER_HEADER_ID, fallback_icon, width_dp, "Filter Messages")
             if item and drawable:
                 try:
                     item.setIcon(drawable)
@@ -595,17 +612,7 @@ class ChatContentFilterPlugin(BasePlugin):
 
                 plugin_self = self
                 touch_listener = HeaderTouchListener(plugin_self, fragment)
-
-                # Set onTouchListener on item and any inner views (like iconView)
                 item.setOnTouchListener(touch_listener)
-                try:
-                    child_count = item.getChildCount()
-                    for idx in range(child_count):
-                        child = item.getChildAt(idx)
-                        if child:
-                            child.setOnTouchListener(touch_listener)
-                except Exception:
-                    pass
 
                 # Short tap click handler
                 def handle_short_click(view):
@@ -643,7 +650,6 @@ class ChatContentFilterPlugin(BasePlugin):
         if not activity:
             return
 
-        from org.telegram.messenger import AndroidUtilities
         from android.graphics.drawable import GradientDrawable
 
         text_color = 0xFFFFFFFF
@@ -682,19 +688,21 @@ class ChatContentFilterPlugin(BasePlugin):
 
         container = LinearLayout(activity)
         container.setOrientation(LinearLayout.VERTICAL)
-        pad = AndroidUtilities.dp(16)
+        pad = AndroidUtilities.dp(16) if AndroidUtilities else 48
         container.setPadding(pad, pad, pad, pad)
 
         # 1. Master Switch Card Container
         master_card = LinearLayout(activity)
         master_card.setOrientation(LinearLayout.HORIZONTAL)
-        master_card_pad = AndroidUtilities.dp(12)
+        master_card_pad = AndroidUtilities.dp(12) if AndroidUtilities else 36
         master_card.setPadding(master_card_pad, master_card_pad, master_card_pad, master_card_pad)
 
         card_drawable = GradientDrawable()
-        card_drawable.setCornerRadius(float(AndroidUtilities.dp(12)))
+        card_radius = float(AndroidUtilities.dp(12)) if AndroidUtilities else 36.0
+        card_drawable.setCornerRadius(card_radius)
         card_drawable.setColor(card_bg)
-        card_drawable.setStroke(AndroidUtilities.dp(1), divider_color)
+        stroke_w = AndroidUtilities.dp(1) if AndroidUtilities else 2
+        card_drawable.setStroke(stroke_w, divider_color)
         master_card.setBackground(card_drawable)
 
         master_text_box = LinearLayout(activity)
@@ -706,8 +714,8 @@ class ChatContentFilterPlugin(BasePlugin):
         master_label.setTextSize(2, 16)
         master_label.setTextColor(text_color)
         try:
-            from org.telegram.messenger import AndroidUtilities
-            master_label.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+            if AndroidUtilities:
+                master_label.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
         except Exception:
             pass
 
@@ -715,7 +723,8 @@ class ChatContentFilterPlugin(BasePlugin):
         master_sub.setText("Master toggle to turn all filtering ON / OFF")
         master_sub.setTextSize(2, 12)
         master_sub.setTextColor(subtext_color)
-        master_sub.setPadding(0, AndroidUtilities.dp(2), 0, 0)
+        sub_pad = AndroidUtilities.dp(2) if AndroidUtilities else 4
+        master_sub.setPadding(0, sub_pad, 0, 0)
 
         master_text_box.addView(master_label)
         master_text_box.addView(master_sub)
@@ -746,10 +755,12 @@ class ChatContentFilterPlugin(BasePlugin):
             header.setText(title)
             header.setTextSize(2, 12)
             header.setTextColor(accent_color)
-            header.setPadding(0, AndroidUtilities.dp(16), 0, AndroidUtilities.dp(6))
+            top_pad = AndroidUtilities.dp(16) if AndroidUtilities else 48
+            bot_pad = AndroidUtilities.dp(6) if AndroidUtilities else 18
+            header.setPadding(0, top_pad, 0, bot_pad)
             try:
-                from org.telegram.messenger import AndroidUtilities
-                header.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
+                if AndroidUtilities:
+                    header.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"))
             except Exception:
                 pass
             container.addView(header)
@@ -757,8 +768,11 @@ class ChatContentFilterPlugin(BasePlugin):
         # Helper to create horizontal divider line
         def add_divider():
             div = View(activity)
-            lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, AndroidUtilities.dp(1))
-            lp.setMargins(0, AndroidUtilities.dp(12), 0, AndroidUtilities.dp(4))
+            line_h = AndroidUtilities.dp(1) if AndroidUtilities else 2
+            lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, line_h)
+            m_top = AndroidUtilities.dp(12) if AndroidUtilities else 36
+            m_bot = AndroidUtilities.dp(4) if AndroidUtilities else 12
+            lp.setMargins(0, m_top, 0, m_bot)
             div.setLayoutParams(lp)
             div.setBackgroundColor(divider_color)
             container.addView(div)
@@ -767,7 +781,8 @@ class ChatContentFilterPlugin(BasePlugin):
         def add_switch_row(key, title, subtitle, default_val):
             row = LinearLayout(activity)
             row.setOrientation(LinearLayout.HORIZONTAL)
-            row.setPadding(0, AndroidUtilities.dp(8), 0, AndroidUtilities.dp(8))
+            r_pad = AndroidUtilities.dp(8) if AndroidUtilities else 24
+            row.setPadding(0, r_pad, 0, r_pad)
 
             text_box = LinearLayout(activity)
             text_box.setOrientation(LinearLayout.VERTICAL)
