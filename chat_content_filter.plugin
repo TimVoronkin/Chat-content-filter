@@ -8,6 +8,7 @@ from ui.settings import Header, Switch, Divider
 from java import dynamic_proxy
 from android.widget import CompoundButton, LinearLayout, ScrollView, TextView, Switch as AndroidSwitch
 from android.view import View, MotionEvent
+import time
 
 try:
     from org.telegram.messenger import AndroidUtilities
@@ -43,7 +44,7 @@ __id__ = "chat_content_filter"
 __name__ = "Chat Content Filter"
 __description__ = "Filter specific message types in chats with a header button and interactive toggles."
 __author__ = "Personal edition"
-__version__ = "4.3.1"
+__version__ = "4.7.0"
 __icon__ = "exteraPlugins/1"
 __min_version__ = "12.5.1"
 __sdk_version__ = ">=1.4.3.3"
@@ -69,24 +70,45 @@ PATH_VISIBILITY_ON = (
     "t5.19-1.49Z"
 )
 
+_SET_MEASURED_DIMENSION = None
+
+
+def get_set_measured_dimension_method():
+    """Lazily locates and caches View.setMeasuredDimension(int, int)."""
+    global _SET_MEASURED_DIMENSION
+    if _SET_MEASURED_DIMENSION is None:
+        try:
+            from java.lang import Integer
+            int_type = Integer.TYPE
+            ViewClass = find_class("android.view.View")
+            if ViewClass:
+                for m in ViewClass.getDeclaredMethods():
+                    if m.getName() == "setMeasuredDimension":
+                        pts = m.getParameterTypes()
+                        if len(pts) == 2 and pts[0] == int_type and pts[1] == int_type:
+                            m.setAccessible(True)
+                            _SET_MEASURED_DIMENSION = m
+                            break
+        except Exception:
+            pass
+    return _SET_MEASURED_DIMENSION
+
 
 def _set_zero_dimensions(view):
-    """Safely call setMeasuredDimension(0, 0) to avoid IllegalStateException."""
-    try:
-        view.setMeasuredDimension(0, 0)
-        return True
-    except Exception:
-        pass
-    try:
-        from java.lang import Integer
-        int_type = Integer.TYPE
-        ViewClass = find_class("android.view.View")
-        method = ViewClass.getDeclaredMethod("setMeasuredDimension", [int_type, int_type])
-        method.setAccessible(True)
-        method.invoke(view, 0, 0)
-        return True
-    except Exception:
-        return False
+    """Sets measured dimensions of the view to 0x0 to eliminate vertical gaps."""
+    m = get_set_measured_dimension_method()
+    if m is not None:
+        try:
+            from java.lang import Integer
+            m.invoke(view, [Integer.valueOf(0), Integer.valueOf(0)])
+            return True
+        except Exception:
+            try:
+                m.invoke(view, 0, 0)
+                return True
+            except Exception:
+                pass
+    return False
 
 
 class LongPressRunnable(dynamic_proxy(find_class("java.lang.Runnable"))):
@@ -172,15 +194,18 @@ class ChatActivityHook(MethodHook):
             if self.action_name in ("createView", "onResume"):
                 run_on_ui_thread(lambda: self.plugin.attach_header_button(fragment))
 
-            if self.action_name in ("onResume", "processLoadedMessages"):
-                self.plugin.update_visible_dates(fragment)
+            if self.action_name == "onResume":
+                self.plugin.scan_messages_incremental(fragment, full=True)
                 run_on_ui_thread(lambda: self.plugin.refresh_chat_view(fragment))
+
+            if self.action_name == "processLoadedMessages":
+                self.plugin.on_messages_loaded(fragment)
         except Exception:
             pass
 
 
 class MessageCellHook(MethodHook):
-    """Hooks setMessageObject on ChatMessageCell and ChatActionCell to adjust visibility."""
+    """Hooks setMessageObject on ChatMessageCell and ChatActionCell to adjust visibility on bind."""
     def __init__(self, plugin):
         super().__init__()
         self.plugin = plugin
@@ -190,67 +215,50 @@ class MessageCellHook(MethodHook):
             cell = param.thisObject
             if not cell:
                 return
-
             self.plugin.apply_cell_visibility(cell)
         except Exception:
             pass
 
 
 class MessageCellMeasureHook(MethodHook):
-    """Hooks onMeasure on ChatMessageCell and ChatActionCell to collapse hidden rows to 0x0."""
+    """Hooks onMeasure on ChatMessageCell and ChatActionCell to collapse hidden rows to 0x0 instantly."""
     def __init__(self, plugin):
         super().__init__()
         self.plugin = plugin
 
     def before_hooked_method(self, param):
         try:
-            if not self.plugin.get_setting("plugin_enabled", True):
+            if not self.plugin.is_enabled():
                 return
 
             cell = param.thisObject
             if not cell:
                 return
 
+            is_hidden = False
             if cell.getVisibility() == View.GONE:
-                if _set_zero_dimensions(cell):
-                    param.setResult(None)
-                return
+                is_hidden = True
+            else:
+                msg = self.plugin.get_cell_message_object(cell)
+                if msg is not None and not self.plugin.is_message_visible(msg):
+                    cell.setVisibility(View.GONE)
+                    is_hidden = True
 
-            msg = self.plugin.get_cell_message_object(cell)
-            if msg is not None and not self.plugin.is_message_visible(msg):
-                cell.setVisibility(View.GONE)
+            if is_hidden:
+                # Fully collapse LayoutParams dimensions and margins
                 lp = cell.getLayoutParams()
                 if lp is not None:
-                    lp.width = 0
-                    lp.height = 0
+                    if lp.height != 0 or lp.width != 0:
+                        lp.height = 0
+                        lp.width = 0
+                    if hasattr(lp, "topMargin") and lp.topMargin != 0:
+                        lp.topMargin = 0
+                    if hasattr(lp, "bottomMargin") and lp.bottomMargin != 0:
+                        lp.bottomMargin = 0
+
+                # Set 0x0 measurement to eliminate empty gaps in RecyclerView
                 if _set_zero_dimensions(cell):
                     param.setResult(None)
-        except Exception:
-            pass
-
-
-class MessageCellDrawHook(MethodHook):
-    """Hooks onDraw on ChatMessageCell and ChatActionCell to prevent drawing hidden items."""
-    def __init__(self, plugin):
-        super().__init__()
-        self.plugin = plugin
-
-    def before_hooked_method(self, param):
-        try:
-            if not self.plugin.get_setting("plugin_enabled", True):
-                return
-
-            cell = param.thisObject
-            if not cell:
-                return
-
-            if cell.getVisibility() == View.GONE:
-                param.setResult(None)
-                return
-
-            msg = self.plugin.get_cell_message_object(cell)
-            if msg is not None and not self.plugin.is_message_visible(msg):
-                param.setResult(None)
         except Exception:
             pass
 
@@ -260,9 +268,10 @@ class ChatContentFilterPlugin(BasePlugin):
         self._loaded = True
         self.unhook_objs = []
         self.visible_days = set()
-        self.visible_date_hashes = set()
-        self._dates_initialized = False
+        self._scanned_message_count = 0
         self._current_fragment = None
+        self._msg_visibility_cache = {}
+        self._last_loaded_time = 0
 
         try:
             self.add_menu_item(
@@ -290,9 +299,9 @@ class ChatContentFilterPlugin(BasePlugin):
                 pass
         self.unhook_objs.clear()
         self.visible_days.clear()
-        self.visible_date_hashes.clear()
-        self._dates_initialized = False
+        self._scanned_message_count = 0
         self._current_fragment = None
+        self._msg_visibility_cache.clear()
 
         try:
             from client_utils import get_last_fragment
@@ -305,9 +314,28 @@ class ChatContentFilterPlugin(BasePlugin):
     def on_chat_destroy(self, fragment):
         if fragment == self._current_fragment:
             self.visible_days.clear()
-            self.visible_date_hashes.clear()
-            self._dates_initialized = False
+            self._scanned_message_count = 0
             self._current_fragment = None
+            self._msg_visibility_cache.clear()
+
+    def set_setting(self, key, value):
+        super().set_setting(key, value)
+        self._msg_visibility_cache.clear()
+        self.visible_days.clear()
+        self._scanned_message_count = 0
+
+    def is_enabled(self) -> bool:
+        return bool(self.get_setting("plugin_enabled", True))
+
+    def get_show_my_messages(self) -> bool:
+        """Returns True if the user's own messages should be shown."""
+        val = self.get_setting("show_my_messages", None)
+        if val is not None:
+            return bool(val)
+        old_hide = self.get_setting("hide_my_messages", None)
+        if old_hide is not None:
+            return not bool(old_hide)
+        return True
 
     def create_settings(self):
         return [
@@ -321,11 +349,11 @@ class ChatContentFilterPlugin(BasePlugin):
             ),
             Header(text="Sender Filters"),
             Switch(
-                key="hide_my_messages",
-                text="Hide My Messages",
-                default=False,
-                subtext="Do not show messages sent by yourself",
-                on_change=lambda val: self.set_setting("hide_my_messages", val)
+                key="show_my_messages",
+                text="Show My Messages",
+                default=True,
+                subtext="Show messages sent by yourself",
+                on_change=lambda val: self.set_setting("show_my_messages", val)
             ),
             Header(text="Visible Message Types"),
             Switch(
@@ -500,45 +528,46 @@ class ChatContentFilterPlugin(BasePlugin):
         return None
 
     def apply_cell_visibility(self, cell):
-        """Directly configures visibility and dimensions on a cell view."""
+        """Configures visibility and dimensions directly on the LayoutParams object."""
         if not cell:
             return
         try:
             from android.view import ViewGroup
 
-            if not self.get_setting("plugin_enabled", True):
+            if not self.is_enabled():
                 if cell.getVisibility() != View.VISIBLE:
                     cell.setVisibility(View.VISIBLE)
                 lp = cell.getLayoutParams()
-                if lp is not None and (lp.width == 0 or lp.height == 0):
-                    lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+                if lp is not None and (lp.height == 0 or lp.width == 0):
                     lp.height = ViewGroup.LayoutParams.WRAP_CONTENT
-                    cell.setLayoutParams(lp)
+                    lp.width = ViewGroup.LayoutParams.MATCH_PARENT
                 return
 
             msg = self.get_cell_message_object(cell)
             if msg is not None:
                 visible = self.is_message_visible(msg)
                 if not visible:
-                    cell.setVisibility(View.GONE)
+                    if cell.getVisibility() != View.GONE:
+                        cell.setVisibility(View.GONE)
                     lp = cell.getLayoutParams()
-                    if lp is not None and (lp.width != 0 or lp.height != 0):
-                        lp.width = 0
+                    if lp is not None:
                         lp.height = 0
-                        cell.setLayoutParams(lp)
+                        lp.width = 0
+                        if hasattr(lp, "topMargin"):
+                            lp.topMargin = 0
+                        if hasattr(lp, "bottomMargin"):
+                            lp.bottomMargin = 0
                 else:
                     if cell.getVisibility() != View.VISIBLE:
                         cell.setVisibility(View.VISIBLE)
                     lp = cell.getLayoutParams()
-                    if lp is not None and (lp.width == 0 or lp.height == 0):
-                        lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+                    if lp is not None and (lp.height == 0 or lp.width == 0):
                         lp.height = ViewGroup.LayoutParams.WRAP_CONTENT
-                        cell.setLayoutParams(lp)
+                        lp.width = ViewGroup.LayoutParams.MATCH_PARENT
         except Exception:
             pass
 
     def update_header_button_state(self, fragment):
-        """Updates header icon between visibility_off (filter active) and visibility (filter inactive)."""
         if not fragment:
             return
         try:
@@ -553,7 +582,7 @@ class ChatContentFilterPlugin(BasePlugin):
                 return
 
             activity = fragment.getParentActivity()
-            is_enabled = bool(self.get_setting("plugin_enabled", True))
+            is_enabled = self.is_enabled()
             path_data = PATH_VISIBILITY_OFF if is_enabled else PATH_VISIBILITY_ON
             drawable = self.create_vector_drawable(activity, path_data)
             if drawable and hasattr(item, "setIcon"):
@@ -573,12 +602,11 @@ class ChatContentFilterPlugin(BasePlugin):
             if not menu:
                 return
 
-            # Check if switching to a new fragment
             if fragment != getattr(self, "_current_fragment", None):
                 self._current_fragment = fragment
                 self.visible_days.clear()
-                self.visible_date_hashes.clear()
-                self._dates_initialized = False
+                self._scanned_message_count = 0
+                self._msg_visibility_cache.clear()
 
             item = menu.getItem(FILTER_HEADER_ID)
             if item is not None:
@@ -587,7 +615,7 @@ class ChatContentFilterPlugin(BasePlugin):
 
             activity = fragment.getParentActivity()
 
-            is_enabled = bool(self.get_setting("plugin_enabled", True))
+            is_enabled = self.is_enabled()
             path_data = PATH_VISIBILITY_OFF if is_enabled else PATH_VISIBILITY_ON
             drawable = self.create_vector_drawable(activity, path_data)
             fallback_icon = self.find_filter_icon_id(activity) or 0
@@ -601,7 +629,6 @@ class ChatContentFilterPlugin(BasePlugin):
                     pass
 
             if item:
-                # Place next to (before) the 3-dots overflow menu button
                 try:
                     count = menu.getChildCount()
                     if count > 1:
@@ -614,12 +641,11 @@ class ChatContentFilterPlugin(BasePlugin):
                 touch_listener = HeaderTouchListener(plugin_self, fragment)
                 item.setOnTouchListener(touch_listener)
 
-                # Short tap click handler
                 def handle_short_click(view):
                     if getattr(touch_listener, "long_pressed", False):
                         touch_listener.long_pressed = False
                         return
-                    new_state = not plugin_self.get_setting("plugin_enabled", True)
+                    new_state = not plugin_self.is_enabled()
                     plugin_self.set_setting("plugin_enabled", new_state)
                     plugin_self.update_header_button_state(fragment)
                     plugin_self.refresh_chat_view(fragment)
@@ -631,7 +657,6 @@ class ChatContentFilterPlugin(BasePlugin):
 
                 item.setOnClickListener(OnClickListener(handle_short_click))
 
-                # Standard long click fallback
                 def handle_long_click(view):
                     touch_listener.long_pressed = True
                     plugin_self.open_filter_dialog(fragment)
@@ -730,7 +755,7 @@ class ChatContentFilterPlugin(BasePlugin):
         master_text_box.addView(master_sub)
 
         master_sw = AndroidSwitch(activity)
-        master_sw.setChecked(bool(self.get_setting("plugin_enabled", True)))
+        master_sw.setChecked(bool(self.is_enabled()))
 
         plugin_self = self
 
@@ -749,7 +774,6 @@ class ChatContentFilterPlugin(BasePlugin):
         master_card.addView(master_sw)
         container.addView(master_card)
 
-        # Helper to create section headers
         def add_section_header(title):
             header = TextView(activity)
             header.setText(title)
@@ -765,7 +789,6 @@ class ChatContentFilterPlugin(BasePlugin):
                 pass
             container.addView(header)
 
-        # Helper to create horizontal divider line
         def add_divider():
             div = View(activity)
             line_h = AndroidUtilities.dp(1) if AndroidUtilities else 2
@@ -777,7 +800,6 @@ class ChatContentFilterPlugin(BasePlugin):
             div.setBackgroundColor(divider_color)
             container.addView(div)
 
-        # Helper to add switch rows
         def add_switch_row(key, title, subtitle, default_val):
             row = LinearLayout(activity)
             row.setOrientation(LinearLayout.HORIZONTAL)
@@ -802,17 +824,20 @@ class ChatContentFilterPlugin(BasePlugin):
             text_box.addView(sub)
 
             sw = AndroidSwitch(activity)
-            sw.setChecked(bool(plugin_self.get_setting(key, default_val)))
+            if key == "show_my_messages":
+                sw.setChecked(bool(plugin_self.get_show_my_messages()))
+            else:
+                sw.setChecked(bool(plugin_self.get_setting(key, default_val)))
             sw.setOnCheckedChangeListener(SwitchChangeListener(key, plugin_self, fragment))
 
             row.addView(text_box)
             row.addView(sw)
             container.addView(row)
 
-        # 2. Sender Filters Section
+        # 2. Sender Filters Section (Inverted: Show My Messages)
         add_divider()
         add_section_header("SENDER FILTERS")
-        add_switch_row("hide_my_messages", "Hide My Messages", "Do not show messages sent by yourself", False)
+        add_switch_row("show_my_messages", "Show My Messages", "Show messages sent by yourself", True)
 
         # 3. Content Categories Section
         add_divider()
@@ -845,7 +870,6 @@ class ChatContentFilterPlugin(BasePlugin):
         builder.show()
 
     def is_date_object(self, msg) -> bool:
-        """Determines if a MessageObject is a date separator capsule."""
         if not msg:
             return False
         try:
@@ -866,25 +890,15 @@ class ChatContentFilterPlugin(BasePlugin):
         return False
 
     def is_outgoing_message(self, msg) -> bool:
-        """Checks if a message was sent by the current user."""
         if not msg:
             return False
         try:
             if hasattr(msg, "isOut") and callable(msg.isOut):
-                if msg.isOut():
-                    return True
+                return bool(msg.isOut())
             elif hasattr(msg, "isOut") and isinstance(msg.isOut, bool):
-                if msg.isOut:
-                    return True
-        except Exception:
-            pass
-        try:
+                return bool(msg.isOut)
             if hasattr(msg, "isOutOwner") and callable(msg.isOutOwner):
-                if msg.isOutOwner():
-                    return True
-        except Exception:
-            pass
-        try:
+                return bool(msg.isOutOwner())
             raw = getattr(msg, "messageOwner", msg)
             if getattr(raw, "out", False):
                 return True
@@ -893,7 +907,6 @@ class ChatContentFilterPlugin(BasePlugin):
         return False
 
     def get_message_day(self, msg):
-        """Extracts the calendar day string (YYYY-MM-DD) from a message timestamp."""
         if not msg:
             return None
         try:
@@ -902,60 +915,49 @@ class ChatContentFilterPlugin(BasePlugin):
             if ts is None:
                 ts = getattr(msg, "date", None)
             if ts:
-                import datetime
-                return datetime.datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d")
+                return int(ts) // 86400
         except Exception:
             pass
         return None
 
     def is_message_content_visible(self, msg) -> bool:
-        """Checks visibility for normal chat content against the 9 categories."""
         if not msg:
             return True
         try:
             raw = getattr(msg, "messageOwner", msg)
 
-            # 9. Calls & System Actions (join/leave, call logs, pin messages)
             if getattr(raw, "action", None) is not None:
-                return self.get_setting("show_calls", False)
+                return bool(self.get_setting("show_calls", False))
 
             media = getattr(raw, "media", None)
             media_type = media.getClass().getSimpleName() if media else "None"
 
-            # 7. Polls
             if (hasattr(msg, "isPoll") and msg.isPoll()) or media_type == "TL_messageMediaPoll":
-                return self.get_setting("show_polls", False)
+                return bool(self.get_setting("show_polls", False))
 
-            # 8. Stickers & GIFs (checked before documents/photos)
             if (hasattr(msg, "isSticker") and msg.isSticker()) or \
                (hasattr(msg, "isGif") and msg.isGif()) or \
                (hasattr(msg, "isAnimatedSticker") and msg.isAnimatedSticker()):
-                return self.get_setting("show_stickers", False)
+                return bool(self.get_setting("show_stickers", False))
 
-            # 5. Voice Notes & Music (checked before general documents)
             if (hasattr(msg, "isVoice") and msg.isVoice()) or \
                (hasattr(msg, "isMusic") and msg.isMusic()) or \
                (hasattr(msg, "isAudio") and msg.isAudio()):
-                return self.get_setting("show_audio", False)
+                return bool(self.get_setting("show_audio", False))
 
-            # 3. Videos & Video Notes (checked before general documents)
             if (hasattr(msg, "isVideo") and msg.isVideo()) or \
                (hasattr(msg, "isRoundVideo") and msg.isRoundVideo()):
-                return self.get_setting("show_videos", True)
+                return bool(self.get_setting("show_videos", True))
 
-            # 2. Photos
             if (hasattr(msg, "isPhoto") and msg.isPhoto()) or media_type == "TL_messageMediaPhoto":
-                return self.get_setting("show_photos", True)
+                return bool(self.get_setting("show_photos", True))
 
-            # 4. Files & Documents
             if (hasattr(msg, "isDocument") and msg.isDocument()) or media_type == "TL_messageMediaDocument":
-                return self.get_setting("show_documents", True)
+                return bool(self.get_setting("show_documents", True))
 
-            # 6. Links & Web Previews
             if media_type == "TL_messageMediaWebPage" or (hasattr(msg, "hasWebPage") and msg.hasWebPage()):
-                return self.get_setting("show_links", False)
+                return bool(self.get_setting("show_links", False))
 
-            # Check text entities for URLs
             has_url = False
             try:
                 entities = getattr(raw, "entities", None)
@@ -969,76 +971,60 @@ class ChatContentFilterPlugin(BasePlugin):
                 pass
 
             if has_url:
-                return self.get_setting("show_links", False)
+                return bool(self.get_setting("show_links", False))
 
-            # Other media types
             if media is not None and media_type not in ("TL_messageMediaEmpty", "None"):
-                return self.get_setting("show_calls", False)
+                return bool(self.get_setting("show_calls", False))
 
-            # 1. Plain Text Messages
-            return self.get_setting("show_text", False)
+            return bool(self.get_setting("show_text", False))
 
         except Exception:
             return True
 
     def is_date_visible(self, msg) -> bool:
-        """A date capsule is visible ONLY if there is at least one visible message in its day."""
-        if not self.get_setting("plugin_enabled", True):
+        if not self.is_enabled():
             return True
-
-        # If dates haven't been resolved yet, trigger on-the-fly resolution
-        if not getattr(self, "_dates_initialized", False):
-            try:
-                from client_utils import get_last_fragment
-                fragment = get_last_fragment()
-                if fragment:
-                    self.update_visible_dates(fragment)
-            except Exception:
-                pass
-
-        # If still not initialized (e.g. messages not yet loaded), keep date visible by default
-        if not getattr(self, "_dates_initialized", False):
-            return True
-
-        try:
-            from java.lang import System
-            msg_hash = System.identityHashCode(msg)
-            if msg_hash in self.visible_date_hashes:
-                return True
-        except Exception:
-            pass
-
         day = self.get_message_day(msg)
-        if day and day in self.visible_days:
-            return True
-
-        return False
+        return day is not None and day in self.visible_days
 
     def is_message_visible(self, msg) -> bool:
         if not msg:
             return True
         try:
-            if not self.get_setting("plugin_enabled", True):
+            if not self.is_enabled():
                 return True
 
-            # Filter date capsules based on whether their day has visible messages
             if self.is_date_object(msg):
                 return self.is_date_visible(msg)
 
-            # Unread messages divider remains visible
             if getattr(msg, "isDateOrUnread", False) and not self.is_date_object(msg):
                 return True
 
-            # If "Hide My Messages" is enabled, hide outgoing messages
-            if self.get_setting("hide_my_messages", False) and self.is_outgoing_message(msg):
-                return False
+            # Fast cache lookup by message id
+            msg_id = None
+            try:
+                if hasattr(msg, "getId"):
+                    msg_id = int(msg.getId())
+            except Exception:
+                pass
 
-            return self.is_message_content_visible(msg)
+            if msg_id is not None and msg_id in self._msg_visibility_cache:
+                return self._msg_visibility_cache[msg_id]
+
+            if not self.get_show_my_messages() and self.is_outgoing_message(msg):
+                visible = False
+            else:
+                visible = self.is_message_content_visible(msg)
+
+            if msg_id is not None:
+                self._msg_visibility_cache[msg_id] = visible
+
+            return visible
         except Exception:
             return True
 
-    def update_visible_dates(self, chat_activity):
-        """Analyzes chat messages and marks which date capsules have visible messages."""
+    def scan_messages_incremental(self, chat_activity, full=False):
+        """Scans only new messages incrementally instead of scanning the full list on every load."""
         if not chat_activity:
             return
         try:
@@ -1048,74 +1034,53 @@ class ChatContentFilterPlugin(BasePlugin):
 
             size = messages.size()
             if size == 0:
-                # Messages not loaded yet; wait for processLoadedMessages
+                self.visible_days.clear()
+                self._scanned_message_count = 0
                 return
 
-            visible_days = set()
-            visible_date_hashes = set()
+            start_idx = 0 if full else getattr(self, "_scanned_message_count", 0)
+            if start_idx >= size:
+                return
 
-            from java.lang import System
-
-            # Pass 1: Collect days of all visible content messages
-            for i in range(size):
+            for i in range(start_idx, size):
                 msg = messages.get(i)
                 if not msg or self.is_date_object(msg):
                     continue
-
-                if self.get_setting("hide_my_messages", False) and self.is_outgoing_message(msg):
+                if not self.get_show_my_messages() and self.is_outgoing_message(msg):
                     continue
-
-                if self.is_message_content_visible(msg):
+                if self.is_message_visible(msg):
                     day = self.get_message_day(msg)
-                    if day:
-                        visible_days.add(day)
+                    if day is not None:
+                        self.visible_days.add(day)
 
-            # Pass 2: Cluster grouping in messages array (ordered newest to oldest)
-            has_visible_since_last_date = False
-
-            for i in range(size):
-                msg = messages.get(i)
-                if not msg:
-                    continue
-
-                if self.is_date_object(msg):
-                    # A date separator bounds the chunk of messages newer than it
-                    d_day = self.get_message_day(msg)
-                    if has_visible_since_last_date or (d_day and d_day in visible_days):
-                        try:
-                            visible_date_hashes.add(System.identityHashCode(msg))
-                        except Exception:
-                            pass
-                        if d_day:
-                            visible_days.add(d_day)
-                    # Reset boundary for the next chunk
-                    has_visible_since_last_date = False
-                else:
-                    msg_visible = True
-                    if self.get_setting("hide_my_messages", False) and self.is_outgoing_message(msg):
-                        msg_visible = False
-                    elif not self.is_message_content_visible(msg):
-                        msg_visible = False
-
-                    if msg_visible:
-                        has_visible_since_last_date = True
-                        d_day = self.get_message_day(msg)
-                        if d_day:
-                            visible_days.add(d_day)
-
-            self.visible_days = visible_days
-            self.visible_date_hashes = visible_date_hashes
-            self._dates_initialized = True
+            self._scanned_message_count = size
         except Exception as e:
             if hasattr(self, "logger") and self.logger:
-                self.logger.error(f"update_visible_dates error: {e}")
+                self.logger.error(f"scan_messages_incremental error: {e}")
+
+    def on_messages_loaded(self, fragment):
+        """Called when Telegram finishes loading a chunk of messages."""
+        if fragment != getattr(self, "_current_fragment", None):
+            return
+
+        now = time.time()
+        # Cooldown guard: prevent Telegram from loading batches in rapid succession
+        if now - getattr(self, "_last_loaded_time", 0) < 0.2:
+            return
+        self._last_loaded_time = now
+
+        # Only scan newly arrived messages incrementally
+        self.scan_messages_incremental(fragment, full=False)
 
     def refresh_chat_view(self, chat_activity):
-        """Forces RecyclerView / adapter to re-bind visible cells without mutating data arrays."""
+        """Forces RecyclerView / adapter to re-bind visible cells."""
         if not chat_activity:
             return
         try:
-            self.update_visible_dates(chat_activity)
+            self._msg_visibility_cache.clear()
+            self.visible_days.clear()
+            self._scanned_message_count = 0
+            self.scan_messages_incremental(chat_activity, full=True)
             self.update_header_button_state(chat_activity)
 
             chat_list_view = get_private_field(chat_activity, "chatListView") or getattr(chat_activity, "chatListView", None)
@@ -1127,8 +1092,6 @@ class ChatContentFilterPlugin(BasePlugin):
 
                 if hasattr(chat_list_view, "invalidate"):
                     chat_list_view.invalidate()
-                if hasattr(chat_list_view, "requestLayout"):
-                    chat_list_view.requestLayout()
 
             chat_adapter = get_private_field(chat_activity, "chatAdapter") or getattr(chat_activity, "chatAdapter", None)
             if chat_adapter is not None and hasattr(chat_adapter, "notifyDataSetChanged"):
@@ -1166,7 +1129,6 @@ class ChatContentFilterPlugin(BasePlugin):
 
         cell_hook = MessageCellHook(self)
         measure_hook = MessageCellMeasureHook(self)
-        draw_hook = MessageCellDrawHook(self)
 
         for cell_cls in cell_classes:
             if not cell_cls:
@@ -1181,13 +1143,6 @@ class ChatContentFilterPlugin(BasePlugin):
 
             try:
                 unhooks = self.hook_all_methods(cell_cls, "onMeasure", measure_hook)
-                if unhooks:
-                    self.unhook_objs.extend(unhooks)
-            except Exception:
-                pass
-
-            try:
-                unhooks = self.hook_all_methods(cell_cls, "onDraw", draw_hook)
                 if unhooks:
                     self.unhook_objs.extend(unhooks)
             except Exception:
