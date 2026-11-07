@@ -3,7 +3,20 @@ from hook_utils import find_class, get_private_field
 from android_utils import run_on_ui_thread, OnClickListener
 from ui.alert import AlertDialogBuilder
 from ui.bulletin import BulletinHelper
-from ui.settings import Header, Switch, Divider
+try:
+    from ui.settings import Header, Switch, Divider
+except Exception:
+    Header = Switch = Divider = None
+
+try:
+    from ui.settings import Selector
+except Exception:
+    Selector = None
+
+try:
+    from ui.settings import Text
+except Exception:
+    Text = None
 
 from java import dynamic_proxy
 from android.widget import LinearLayout, ScrollView, TextView, ImageView
@@ -42,11 +55,31 @@ except Exception:
             except Exception:
                 return True
 
+try:
+    from android.content import DialogInterface
+    DialogInterfaceOnDismissListener = DialogInterface.OnDismissListener
+except Exception:
+    DialogInterfaceOnDismissListener = find_class("android.content.DialogInterface$OnDismissListener")
+
+if DialogInterfaceOnDismissListener:
+    class DialogDismissProxy(dynamic_proxy(DialogInterfaceOnDismissListener)):
+        def __init__(self, callback):
+            super().__init__()
+            self.callback = callback
+
+        def onDismiss(self, dialog):
+            try:
+                self.callback(dialog)
+            except Exception:
+                pass
+else:
+    DialogDismissProxy = None
+
 __id__ = "chat_content_filter"
 __name__ = "Chat Content Filter"
-__description__ = "Go to the chat and long press on 👁️ to configure which types of messages you want to see in the chat. Short press to toggle. GitHub.com/TimVoronkin/Chat-content-filter"
+__description__ = "Filter chat messages by category (media, files, voice, text, etc.). Short press 👁️ to toggle, long press to configure. GitHub.com/TimVoronkin/Chat-content-filter"
 __author__ = "@Tim_Voronkin"
-__version__ = "1.0"
+__version__ = "1.1"
 __icon__ = "blessedEmojis/44"
 __min_version__ = "12.5.1"
 __sdk_version__ = ">=1.4.3.3"
@@ -73,6 +106,129 @@ PATH_VISIBILITY_OFF = (
     "q0-0.28 0.04-0.53t0.11-0.53L5.55,8.4Zm7.98,2.33ZM9.75,12.6Z"
 )
 
+STRINGS = {
+    "en": {
+        "dialog_title": "Content Filter",
+        "master_title": "Content Filter",
+        "master_sub": "Master toggle for chat filtering",
+        "sec_sender": "SENDER",
+        "sec_content": "CONTENT CATEGORIES",
+        "btn_done": "Done",
+        "filter_enabled_info": "Content filter enabled",
+        "filter_disabled_info": "Content filter disabled",
+        "settings_desc_title": "About & How to Use",
+        "settings_desc_body": (
+            "Chat Content Filter allows you to filter messages in any chat by category "
+            "(photos, videos, documents, voice, text, links, polls, stickers, etc.).\n\n"
+            "How to use:\n"
+            "• Short tap on 👁️ in the chat header to quickly toggle filtering on or off.\n"
+            "• Long press on 👁️ in the chat header to open the category settings dialog and select which message types to display."
+        ),
+        "settings_lang_header": "Language / Мова",
+        "settings_lang_title": "Interface Language",
+        "settings_lang_sub": "Choose language for plugin dialogs and settings",
+        "action_menu_text": "Filter Messages",
+        "action_menu_subtext": "Open content filter options",
+    },
+    "uk": {
+        "dialog_title": "Фільтр контенту",
+        "master_title": "Фільтр контенту",
+        "master_sub": "Головний перемикач фільтрації в чаті",
+        "sec_sender": "ВІДПРАВНИК",
+        "sec_content": "КАТЕГОРІЇ КОНТЕНТУ",
+        "btn_done": "Готово",
+        "filter_enabled_info": "Фільтр контенту увімкнено",
+        "filter_disabled_info": "Фільтр контенту вимкнено",
+        "settings_desc_title": "Опис та використання",
+        "settings_desc_body": (
+            "Chat Content Filter дозволяє фільтрувати повідомлення в будь-якому чаті за категоріями "
+            "(фото, відео, файли, голосові, текст, посилання, опитування, стікери тощо).\n\n"
+            "Як користуватися:\n"
+            "• Короткий натиск на 👁️ у шапці чату швидко вмикає або вимикає фільтрацію.\n"
+            "• Затискання (довгий натиск) на 👁️ відкриває вікно налаштування категорій, де можна обрати потрібні типи повідомлень."
+        ),
+        "settings_lang_header": "Мова / Language",
+        "settings_lang_title": "Мова інтерфейсу",
+        "settings_lang_sub": "Оберіть мову для діалогів та налаштувань плагіна",
+        "action_menu_text": "Фільтр повідомлень",
+        "action_menu_subtext": "Відкрити налаштування фільтрації",
+    }
+}
+
+# Single Source of Truth for all filter categories
+FILTER_CATEGORIES = [
+    {
+        "key": "show_my_messages",
+        "section": "SENDER",
+        "default": True,
+        "title": {"en": "My Messages", "uk": "Мої повідомлення"},
+        "subtitle": {"en": "Messages sent by yourself", "uk": "Повідомлення, надіслані вами"},
+    },
+    {
+        "key": "show_text",
+        "section": "CONTENT",
+        "default": False,
+        "title": {"en": "Plain Text", "uk": "Звичайний текст"},
+        "subtitle": {"en": "Regular text messages", "uk": "Текстові повідомлення без вкладень"},
+    },
+    {
+        "key": "show_photos",
+        "section": "CONTENT",
+        "default": True,
+        "title": {"en": "Photos", "uk": "Фотографії"},
+        "subtitle": {"en": "Photo attachments", "uk": "Фотографії та зображення"},
+    },
+    {
+        "key": "show_videos",
+        "section": "CONTENT",
+        "default": True,
+        "title": {"en": "Videos & Video Notes", "uk": "Відео та кружечки"},
+        "subtitle": {"en": "Videos and round video notes", "uk": "Відеозаписи та круглі відеоповідомлення"},
+    },
+    {
+        "key": "show_documents",
+        "section": "CONTENT",
+        "default": True,
+        "title": {"en": "Files & Documents", "uk": "Файли та документи"},
+        "subtitle": {"en": "Documents, PDFs, archives, etc.", "uk": "Документи, PDF, архіви тощо"},
+    },
+    {
+        "key": "show_audio",
+        "section": "CONTENT",
+        "default": False,
+        "title": {"en": "Voice Notes & Music", "uk": "Голосові та музика"},
+        "subtitle": {"en": "Voice messages and audio files", "uk": "Голосові повідомлення та аудіофайли"},
+    },
+    {
+        "key": "show_links",
+        "section": "CONTENT",
+        "default": False,
+        "title": {"en": "Links & Previews", "uk": "Посилання та прев'ю"},
+        "subtitle": {"en": "Messages with web page previews or URLs", "uk": "Повідомлення з посиланнями та веб-прев'ю"},
+    },
+    {
+        "key": "show_polls",
+        "section": "CONTENT",
+        "default": False,
+        "title": {"en": "Polls", "uk": "Опитування"},
+        "subtitle": {"en": "Polls and quizzes", "uk": "Опитування та вікторини"},
+    },
+    {
+        "key": "show_stickers",
+        "section": "CONTENT",
+        "default": False,
+        "title": {"en": "Stickers & GIFs", "uk": "Стікери та GIF"},
+        "subtitle": {"en": "Stickers and animated GIFs", "uk": "Стікери та анімовані GIF"},
+    },
+    {
+        "key": "show_calls",
+        "section": "CONTENT",
+        "default": False,
+        "title": {"en": "Calls & System", "uk": "Дзвінки та системні"},
+        "subtitle": {"en": "Call logs and system join/pin messages", "uk": "Журнал дзвінків і системні повідомлення"},
+    },
+]
+
 
 class LongPressRunnable(dynamic_proxy(find_class("java.lang.Runnable"))):
     def __init__(self, touch_listener, view, plugin, fragment):
@@ -83,13 +239,30 @@ class LongPressRunnable(dynamic_proxy(find_class("java.lang.Runnable"))):
         self.fragment = fragment
 
     def run(self):
-        self.touch_listener.long_pressed = True
+        if not getattr(self.touch_listener, "long_pressed", False):
+            self.touch_listener.long_pressed = True
+            try:
+                if HapticFeedbackConstants is not None:
+                    self.view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            except Exception:
+                pass
+            self.plugin.open_filter_dialog(self.fragment)
+
+
+class ScrollSafetyRunnable(dynamic_proxy(find_class("java.lang.Runnable"))):
+    """Safety runnable posted to chatListView to ensure layout pass retains exact scroll offset."""
+    def __init__(self, layout_manager, pos, offset):
+        super().__init__()
+        self.layout_manager = layout_manager
+        self.pos = pos
+        self.offset = offset
+
+    def run(self):
         try:
-            if HapticFeedbackConstants is not None:
-                self.view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            if self.layout_manager and hasattr(self.layout_manager, "scrollToPositionWithOffset"):
+                self.layout_manager.scrollToPositionWithOffset(self.pos, self.offset)
         except Exception:
             pass
-        self.plugin.open_filter_dialog(self.fragment)
 
 
 class HeaderTouchListener(dynamic_proxy(find_class("android.view.View$OnTouchListener"))):
@@ -179,14 +352,15 @@ class ChatContentFilterPlugin(BasePlugin):
         self._msg_visibility_cache = {}
         self._last_loaded_time = 0
         self._current_fragment = None
+        self._active_dialog = None
 
         try:
             self.add_menu_item(
                 MenuItemData(
                     menu_type=MenuItemType.CHAT_ACTION_MENU,
                     item_id="chat_content_filter_action",
-                    text="Filter Messages",
-                    subtext="Open content filter options",
+                    text=self.tr("action_menu_text"),
+                    subtext=self.tr("action_menu_subtext"),
                     icon="msg_filter",
                     on_click=self.on_menu_action_click
                 )
@@ -199,6 +373,12 @@ class ChatContentFilterPlugin(BasePlugin):
 
     def on_plugin_unload(self):
         self._loaded = False
+        if getattr(self, "_active_dialog", None) is not None:
+            try:
+                self._active_dialog.dismiss()
+            except Exception:
+                pass
+            self._active_dialog = None
         for unhook in getattr(self, "unhook_objs", []):
             try:
                 self.unhook_method(unhook)
@@ -247,90 +427,91 @@ class ChatContentFilterPlugin(BasePlugin):
             return not bool(old_hide)
         return True
 
+    def get_language(self) -> str:
+        lang = self.get_setting("app_language", None)
+        if lang in ("en", "uk"):
+            return lang
+        idx = self.get_setting("language_index", None)
+        if idx is not None:
+            try:
+                return "uk" if int(idx) == 1 else "en"
+            except Exception:
+                pass
+        try:
+            from org.telegram.messenger import LocaleController
+            code = str(LocaleController.getInstance().getCurrentLocale().getLanguage()).lower()
+            if code in ("uk", "ua"):
+                return "uk"
+        except Exception:
+            pass
+        return "en"
+
+    def tr(self, key: str) -> str:
+        lang = self.get_language()
+        lang_dict = STRINGS.get(lang, STRINGS["en"])
+        return lang_dict.get(key, STRINGS["en"].get(key, key))
+
+    def get_category_setting(self, key: str) -> bool:
+        for cat in FILTER_CATEGORIES:
+            if cat["key"] == key:
+                return bool(self.get_setting(key, cat["default"]))
+        return bool(self.get_setting(key, False))
+
     def create_settings(self):
-        return [
-            Header(text="General Settings"),
-            Switch(
-                key="plugin_enabled",
-                text="Content Filter",
-                default=True,
-                subtext="Master toggle to filter messages in chats",
-                on_change=lambda val: self.set_setting("plugin_enabled", val)
-            ),
-            Header(text="Sender Filters"),
-            Switch(
-                key="show_my_messages",
-                text="My Messages",
-                default=True,
-                subtext="Show messages sent by yourself",
-                on_change=lambda val: self.set_setting("show_my_messages", val)
-            ),
-            Header(text="Visible Message Types"),
-            Switch(
-                key="show_text",
-                text="Plain Text",
-                default=False,
-                subtext="Regular text messages",
-                on_change=lambda val: self.set_setting("show_text", val)
-            ),
-            Switch(
-                key="show_photos",
-                text="Photos",
-                default=True,
-                subtext="Photo attachments",
-                on_change=lambda val: self.set_setting("show_photos", val)
-            ),
-            Switch(
-                key="show_videos",
-                text="Videos & Video Notes",
-                default=True,
-                subtext="Videos and round video notes",
-                on_change=lambda val: self.set_setting("show_videos", val)
-            ),
-            Switch(
-                key="show_documents",
-                text="Files & Documents",
-                default=True,
-                subtext="Documents, PDFs, archives, etc.",
-                on_change=lambda val: self.set_setting("show_documents", val)
-            ),
-            Switch(
-                key="show_audio",
-                text="Voice Notes & Music",
-                default=False,
-                subtext="Voice messages and audio files",
-                on_change=lambda val: self.set_setting("show_audio", val)
-            ),
-            Switch(
-                key="show_links",
-                text="Links & Previews",
-                default=False,
-                subtext="Messages with web page previews",
-                on_change=lambda val: self.set_setting("show_links", val)
-            ),
-            Switch(
-                key="show_polls",
-                text="Polls",
-                default=False,
-                subtext="Polls and quizzes",
-                on_change=lambda val: self.set_setting("show_polls", val)
-            ),
-            Switch(
-                key="show_stickers",
-                text="Stickers & GIFs",
-                default=False,
-                subtext="Stickers and animated GIFs",
-                on_change=lambda val: self.set_setting("show_stickers", val)
-            ),
-            Switch(
-                key="show_calls",
-                text="Calls & System",
-                default=False,
-                subtext="Call logs and system join/pin messages",
-                on_change=lambda val: self.set_setting("show_calls", val)
-            ),
-            Divider(text="Configure which message categories remain visible.")
-        ]
+        try:
+            lang = self.get_language()
+            is_uk = (lang == "uk")
+
+            settings_list = []
+            if Header:
+                settings_list.append(Header(text=self.tr("settings_desc_title")))
+            if Divider:
+                settings_list.append(Divider(text=self.tr("settings_desc_body")))
+            if Header:
+                settings_list.append(Header(text=self.tr("settings_lang_header")))
+
+            used_selector = False
+            if Selector is not None:
+                try:
+                    lang_idx = 1 if is_uk else 0
+                    settings_list.append(
+                        Selector(
+                            key="language_index",
+                            text=self.tr("settings_lang_title"),
+                            default=lang_idx,
+                            items=["English", "Українська"],
+                            on_change=lambda val: (
+                                self.set_setting("language_index", int(val)),
+                                self.set_setting("app_language", "uk" if int(val) == 1 else "en")
+                            )
+                        )
+                    )
+                    used_selector = True
+                except Exception:
+                    used_selector = False
+
+            if not used_selector and Switch is not None:
+                settings_list.append(
+                    Switch(
+                        key="lang_uk_active",
+                        text="Українська мова",
+                        default=is_uk,
+                        subtext="Увімкнено: Українська · Off: English",
+                        on_change=lambda val: (
+                            self.set_setting("app_language", "uk" if val else "en"),
+                            self.set_setting("language_index", 1 if val else 0)
+                        )
+                    )
+                )
+
+            if Divider:
+                settings_list.append(Divider())
+
+            return settings_list
+        except Exception as e:
+            if hasattr(self, "logger") and self.logger:
+                self.logger.error(f"create_settings error: {e}")
+            return []
 
     def create_vector_drawable(self, activity, path_data, color=None, size_dp=24):
         """Creates a vector BitmapDrawable using the given SVG path and color."""
@@ -472,7 +653,7 @@ class ChatContentFilterPlugin(BasePlugin):
             fallback_icon = self.find_filter_icon_id(activity) or 0
 
             width_dp = AndroidUtilities.dp(48) if AndroidUtilities else 144
-            item = menu.addItemWithWidth(FILTER_HEADER_ID, fallback_icon, width_dp, "Filter Messages")
+            item = menu.addItemWithWidth(FILTER_HEADER_ID, fallback_icon, width_dp, self.tr("master_title"))
             if item and drawable:
                 try:
                     item.setIcon(drawable)
@@ -502,16 +683,17 @@ class ChatContentFilterPlugin(BasePlugin):
 
                     if new_state:
                         plugin_self.apply_filter_to_chat(fragment)
-                        BulletinHelper.show_info("Content filter enabled")
+                        BulletinHelper.show_info(plugin_self.tr("filter_enabled_info"))
                     else:
                         plugin_self.restore_original_messages(fragment)
-                        BulletinHelper.show_info("Content filter disabled")
+                        BulletinHelper.show_info(plugin_self.tr("filter_disabled_info"))
 
                 item.setOnClickListener(OnClickListener(handle_short_click))
 
                 def handle_long_click(view):
-                    touch_listener.long_pressed = True
-                    plugin_self.open_filter_dialog(fragment)
+                    if not getattr(touch_listener, "long_pressed", False):
+                        touch_listener.long_pressed = True
+                        plugin_self.open_filter_dialog(fragment)
                     return True
 
                 item.setLongClickable(True)
@@ -527,6 +709,16 @@ class ChatContentFilterPlugin(BasePlugin):
         activity = fragment.getParentActivity() if fragment else None
         if not activity:
             return
+
+        # Prevent duplicate dialogs from opening simultaneously
+        current_dialog = getattr(self, "_active_dialog", None)
+        if current_dialog is not None:
+            try:
+                if hasattr(current_dialog, "isShowing") and current_dialog.isShowing():
+                    return
+            except Exception:
+                pass
+            self._active_dialog = None
 
         text_color = 0xFFFFFFFF
         subtext_color = 0xFFAAAAAA
@@ -560,7 +752,7 @@ class ChatContentFilterPlugin(BasePlugin):
             pass
 
         builder = AlertDialogBuilder(activity)
-        builder.set_title("Content Filter")
+        builder.set_title(self.tr("dialog_title"))
 
         container = LinearLayout(activity)
         container.setOrientation(LinearLayout.VERTICAL)
@@ -595,7 +787,7 @@ class ChatContentFilterPlugin(BasePlugin):
         master_text_box.setLayoutParams(LinearLayout.LayoutParams(0, -2, 1.0))
 
         master_label = TextView(activity)
-        master_label.setText("Content Filter")
+        master_label.setText(self.tr("master_title"))
         master_label.setTextSize(2, 16)
         master_label.setTextColor(text_color)
         try:
@@ -605,7 +797,7 @@ class ChatContentFilterPlugin(BasePlugin):
             pass
 
         master_sub = TextView(activity)
-        master_sub.setText("Master toggle for chat filtering")
+        master_sub.setText(self.tr("master_sub"))
         master_sub.setTextSize(2, 12)
         master_sub.setTextColor(subtext_color)
         sub_pad = AndroidUtilities.dp(2) if AndroidUtilities else 4
@@ -714,7 +906,7 @@ class ChatContentFilterPlugin(BasePlugin):
                     eye_view.setImageDrawable(d)
                 eye_view.setAlpha(1.0 if is_vis else 0.45)
 
-            current_val = plugin_self.get_show_my_messages() if key == "show_my_messages" else bool(plugin_self.get_setting(key, default_val))
+            current_val = plugin_self.get_show_my_messages() if key == "show_my_messages" else bool(plugin_self.get_category_setting(key))
             refresh_row_eye(current_val)
 
             def on_row_click(view):
@@ -725,7 +917,7 @@ class ChatContentFilterPlugin(BasePlugin):
                     refresh_master_ui(True)
                     plugin_self.update_header_button_state(fragment)
 
-                curr = plugin_self.get_show_my_messages() if key == "show_my_messages" else bool(plugin_self.get_setting(key, default_val))
+                curr = plugin_self.get_show_my_messages() if key == "show_my_messages" else bool(plugin_self.get_category_setting(key))
                 new_val = not curr
                 plugin_self.set_setting(key, new_val)
                 refresh_row_eye(new_val)
@@ -739,29 +931,25 @@ class ChatContentFilterPlugin(BasePlugin):
             row.addView(eye_view)
             categories_container.addView(row)
 
+        lang = self.get_language()
+
         # 3. Sender Filters Section
         add_divider()
-        add_section_header("SENDER")
-        add_eye_row("show_my_messages", "My Messages", "Messages sent by yourself", True)
+        add_section_header(self.tr("sec_sender"))
+        for cat in FILTER_CATEGORIES:
+            if cat["section"] == "SENDER":
+                c_title = cat["title"].get(lang, cat["title"]["en"])
+                c_sub = cat["subtitle"].get(lang, cat["subtitle"]["en"])
+                add_eye_row(cat["key"], c_title, c_sub, cat["default"])
 
         # 4. Content Categories Section
         add_divider()
-        add_section_header("CONTENT CATEGORIES")
-
-        categories = [
-            ("show_text", "Plain Text", "Regular text messages", False),
-            ("show_photos", "Photos", "Photo attachments", True),
-            ("show_videos", "Videos & Video Notes", "Videos and round video notes", True),
-            ("show_documents", "Files & Documents", "Documents, PDFs, archives, etc.", True),
-            ("show_audio", "Voice Notes & Music", "Voice messages and audio files", False),
-            ("show_links", "Links & Previews", "Messages with web page previews or URLs", False),
-            ("show_polls", "Polls", "Polls and quizzes", False),
-            ("show_stickers", "Stickers & GIFs", "Stickers and animated GIFs", False),
-            ("show_calls", "Calls & System", "Call logs and system join/pin messages", False),
-        ]
-
-        for key, title, sub, default_val in categories:
-            add_eye_row(key, title, sub, default_val)
+        add_section_header(self.tr("sec_content"))
+        for cat in FILTER_CATEGORIES:
+            if cat["section"] == "CONTENT":
+                c_title = cat["title"].get(lang, cat["title"]["en"])
+                c_sub = cat["subtitle"].get(lang, cat["subtitle"]["en"])
+                add_eye_row(cat["key"], c_title, c_sub, cat["default"])
 
         container.addView(categories_container)
 
@@ -769,11 +957,24 @@ class ChatContentFilterPlugin(BasePlugin):
         scroll.addView(container)
 
         builder.set_view(scroll)
-        builder.set_positive_button("Done", lambda dialog, which: (
+
+        def on_dialog_dismissed():
+            plugin_self._active_dialog = None
+            plugin_self.update_header_button_state(fragment)
+
+        builder.set_positive_button(self.tr("btn_done"), lambda dialog, which: (
             dialog.dismiss(),
-            self.update_header_button_state(fragment)
+            on_dialog_dismissed()
         ))
-        builder.show()
+
+        dialog = builder.show()
+        self._active_dialog = dialog
+
+        if DialogDismissProxy and dialog:
+            try:
+                dialog.setOnDismissListener(DialogDismissProxy(lambda d: on_dialog_dismissed()))
+            except Exception:
+                pass
 
     def _get_chat_key(self, chat_activity):
         if not chat_activity:
@@ -853,36 +1054,36 @@ class ChatContentFilterPlugin(BasePlugin):
             raw = getattr(msg, "messageOwner", msg)
 
             if getattr(raw, "action", None) is not None:
-                return bool(self.get_setting("show_calls", False))
+                return self.get_category_setting("show_calls")
 
             media = getattr(raw, "media", None)
             media_type = media.getClass().getSimpleName() if media else "None"
 
             if (hasattr(msg, "isPoll") and msg.isPoll()) or media_type == "TL_messageMediaPoll":
-                return bool(self.get_setting("show_polls", False))
+                return self.get_category_setting("show_polls")
 
             if (hasattr(msg, "isSticker") and msg.isSticker()) or \
                (hasattr(msg, "isGif") and msg.isGif()) or \
                (hasattr(msg, "isAnimatedSticker") and msg.isAnimatedSticker()):
-                return bool(self.get_setting("show_stickers", False))
+                return self.get_category_setting("show_stickers")
 
             if (hasattr(msg, "isVoice") and msg.isVoice()) or \
                (hasattr(msg, "isMusic") and msg.isMusic()) or \
                (hasattr(msg, "isAudio") and msg.isAudio()):
-                return bool(self.get_setting("show_audio", False))
+                return self.get_category_setting("show_audio")
 
             if (hasattr(msg, "isVideo") and msg.isVideo()) or \
                (hasattr(msg, "isRoundVideo") and msg.isRoundVideo()):
-                return bool(self.get_setting("show_videos", True))
+                return self.get_category_setting("show_videos")
 
             if (hasattr(msg, "isPhoto") and msg.isPhoto()) or media_type == "TL_messageMediaPhoto":
-                return bool(self.get_setting("show_photos", True))
+                return self.get_category_setting("show_photos")
 
             if (hasattr(msg, "isDocument") and msg.isDocument()) or media_type == "TL_messageMediaDocument":
-                return bool(self.get_setting("show_documents", True))
+                return self.get_category_setting("show_documents")
 
             if media_type == "TL_messageMediaWebPage" or (hasattr(msg, "hasWebPage") and msg.hasWebPage()):
-                return bool(self.get_setting("show_links", False))
+                return self.get_category_setting("show_links")
 
             has_url = False
             try:
@@ -897,12 +1098,12 @@ class ChatContentFilterPlugin(BasePlugin):
                 pass
 
             if has_url:
-                return bool(self.get_setting("show_links", False))
+                return self.get_category_setting("show_links")
 
             if media is not None and media_type not in ("TL_messageMediaEmpty", "None"):
-                return bool(self.get_setting("show_calls", False))
+                return self.get_category_setting("show_calls")
 
-            return bool(self.get_setting("show_text", False))
+            return self.get_category_setting("show_text")
 
         except Exception:
             return True
@@ -939,6 +1140,173 @@ class ChatContentFilterPlugin(BasePlugin):
         except Exception:
             return True
 
+    def _get_scroll_anchor(self, chat_activity):
+        """Finds the message closest to the vertical center of the chat list, along with its pixel offset."""
+        try:
+            chat_list_view = get_private_field(chat_activity, "chatListView") or getattr(chat_activity, "chatListView", None)
+            chat_layout_manager = get_private_field(chat_activity, "chatLayoutManager") or getattr(chat_activity, "chatLayoutManager", None)
+            if not chat_list_view or not chat_layout_manager:
+                return None
+
+            count = chat_list_view.getChildCount()
+            if count == 0:
+                return None
+
+            view_height = chat_list_view.getHeight()
+            center_y = view_height / 2.0
+
+            is_reverse = False
+            try:
+                if hasattr(chat_layout_manager, "getReverseLayout"):
+                    is_reverse = bool(chat_layout_manager.getReverseLayout())
+            except Exception:
+                pass
+
+            best_msg = None
+            best_id = None
+            best_offset = 0
+            best_dist = float("inf")
+            best_adapter_pos = -1
+
+            for i in range(count):
+                child = chat_list_view.getChildAt(i)
+                if not child:
+                    continue
+
+                msg = None
+                if hasattr(child, "getMessageObject"):
+                    msg = child.getMessageObject()
+                elif hasattr(child, "currentMessageObject"):
+                    msg = getattr(child, "currentMessageObject", None)
+
+                pos = -1
+                if hasattr(chat_list_view, "getChildAdapterPosition"):
+                    pos = chat_list_view.getChildAdapterPosition(child)
+                elif hasattr(chat_list_view, "getChildPosition"):
+                    pos = chat_list_view.getChildPosition(child)
+
+                if not msg and pos >= 0:
+                    messages = get_private_field(chat_activity, "messages") or getattr(chat_activity, "messages", None)
+                    if messages and pos < messages.size():
+                        msg = messages.get(pos)
+
+                if not msg:
+                    continue
+
+                mid = None
+                try:
+                    if hasattr(msg, "getId"):
+                        mid = int(msg.getId())
+                except Exception:
+                    pass
+
+                child_top = child.getTop()
+                child_bottom = child.getBottom()
+                child_center = (child_top + child_bottom) / 2.0
+                dist = abs(child_center - center_y)
+
+                # Prioritize actual content messages over date dividers
+                if self.is_date_object(msg):
+                    dist += 1000.0
+
+                if dist < best_dist:
+                    best_dist = dist
+                    best_msg = msg
+                    best_id = mid
+                    best_adapter_pos = pos
+
+                    if is_reverse:
+                        pad_bottom = chat_list_view.getPaddingBottom() if hasattr(chat_list_view, "getPaddingBottom") else 0
+                        best_offset = view_height - child_bottom - pad_bottom
+                    else:
+                        pad_top = chat_list_view.getPaddingTop() if hasattr(chat_list_view, "getPaddingTop") else 0
+                        best_offset = child_top - pad_top
+
+            adapter_offset = 0
+            if best_msg and best_id is not None and best_adapter_pos >= 0:
+                messages = get_private_field(chat_activity, "messages") or getattr(chat_activity, "messages", None)
+                if messages:
+                    for idx in range(messages.size()):
+                        m = messages.get(idx)
+                        m_id = None
+                        try:
+                            if hasattr(m, "getId"):
+                                m_id = int(m.getId())
+                        except Exception:
+                            pass
+                        if m_id == best_id:
+                            adapter_offset = best_adapter_pos - idx
+                            break
+
+            if best_msg and best_id is not None:
+                return {
+                    "id": best_id,
+                    "msg": best_msg,
+                    "offset": int(best_offset),
+                    "adapter_offset": adapter_offset,
+                }
+        except Exception:
+            pass
+        return None
+
+    def _restore_scroll_anchor(self, chat_activity, anchor):
+        """Restores the chat scroll position using scrollToPositionWithOffset on the layout manager."""
+        if not anchor or not chat_activity:
+            return
+        try:
+            messages = get_private_field(chat_activity, "messages") or getattr(chat_activity, "messages", None)
+            chat_layout_manager = get_private_field(chat_activity, "chatLayoutManager") or getattr(chat_activity, "chatLayoutManager", None)
+            chat_list_view = get_private_field(chat_activity, "chatListView") or getattr(chat_activity, "chatListView", None)
+            if not messages or not chat_layout_manager or messages.size() == 0:
+                return
+
+            target_id = anchor.get("id")
+            target_offset = anchor.get("offset", 0)
+            target_idx = -1
+
+            if target_id is not None:
+                for i in range(messages.size()):
+                    m = messages.get(i)
+                    mid = None
+                    try:
+                        if hasattr(m, "getId"):
+                            mid = int(m.getId())
+                    except Exception:
+                        pass
+                    if mid == target_id:
+                        target_idx = i
+                        break
+
+            # If exact message not found (e.g. filtered out when enabling filter), find nearest message by date
+            if target_idx == -1 and anchor.get("msg"):
+                orig_msg = anchor["msg"]
+                raw_orig = getattr(orig_msg, "messageOwner", orig_msg)
+                orig_date = getattr(raw_orig, "date", None) or getattr(orig_msg, "date", 0)
+                best_diff = float("inf")
+                for i in range(messages.size()):
+                    m = messages.get(i)
+                    raw_m = getattr(m, "messageOwner", m)
+                    m_date = getattr(raw_m, "date", None) or getattr(m, "date", 0)
+                    diff = abs(int(m_date) - int(orig_date))
+                    if diff < best_diff:
+                        best_diff = diff
+                        target_idx = i
+
+            if target_idx == -1:
+                return
+
+            final_pos = target_idx + anchor.get("adapter_offset", 0)
+            if final_pos < 0:
+                final_pos = 0
+
+            if hasattr(chat_layout_manager, "scrollToPositionWithOffset"):
+                chat_layout_manager.scrollToPositionWithOffset(final_pos, target_offset)
+
+                if chat_list_view:
+                    chat_list_view.post(ScrollSafetyRunnable(chat_layout_manager, final_pos, target_offset))
+        except Exception:
+            pass
+
     def apply_filter_to_chat(self, chat_activity):
         """Applies data-level filtering by placing only matching messages into ChatActivity.messages."""
         if not chat_activity or not self._loaded:
@@ -957,6 +1325,8 @@ class ChatContentFilterPlugin(BasePlugin):
         if not self.is_enabled():
             self.restore_original_messages(chat_activity)
             return
+
+        anchor = self._get_scroll_anchor(chat_activity)
 
         # Initialize or merge snapshot of original messages
         orig = self._original_messages_map.get(chat_key)
@@ -1012,6 +1382,8 @@ class ChatContentFilterPlugin(BasePlugin):
         if chat_adapter is not None and hasattr(chat_adapter, "notifyDataSetChanged"):
             chat_adapter.notifyDataSetChanged()
 
+        self._restore_scroll_anchor(chat_activity, anchor)
+
     def restore_original_messages(self, chat_activity):
         """Restores the complete, unfiltered messages list into ChatActivity.messages."""
         if not chat_activity:
@@ -1023,6 +1395,8 @@ class ChatContentFilterPlugin(BasePlugin):
 
         orig = self._original_messages_map.get(chat_key)
         messages = get_private_field(chat_activity, "messages") or getattr(chat_activity, "messages", None)
+
+        anchor = self._get_scroll_anchor(chat_activity)
 
         if messages is not None and orig is not None:
             messages.clear()
@@ -1037,6 +1411,8 @@ class ChatContentFilterPlugin(BasePlugin):
         chat_adapter = get_private_field(chat_activity, "chatAdapter") or getattr(chat_activity, "chatAdapter", None)
         if chat_adapter is not None and hasattr(chat_adapter, "notifyDataSetChanged"):
             chat_adapter.notifyDataSetChanged()
+
+        self._restore_scroll_anchor(chat_activity, anchor)
 
     def on_messages_loaded(self, fragment, new_messages_arg=None):
         """Called when Telegram loads an older chunk of messages via pagination."""
