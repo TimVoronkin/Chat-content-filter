@@ -1,14 +1,27 @@
-## Chat Content Filter
-is a plugin for alternative Telegram launchers like [ExteraGram](https://exteragram.app/) or [AyuGram](https://docs.ayugram.one/).
+# My ExteraGram plugins
 
-Features:
-- Press and hold on the 👁️ icon in the chat header to configure which types of messages you want to see in the chat.
-- Short press on the 👁️ icon to toggle the filter on or off.
-- Keeps your exact scroll position seamlessly when toggling the filter.
-- English or Ukrainian localization can be selected in the settings.
+A collection of my plugins for alternative Telegram clients ([ExteraGram](https://exteragram.app/) and [AyuGram](https://docs.ayugram.one/)).
+Currently, this repository features two plugins:
 
-Installation:
+## 1. Chat Content Filter
+[`chat_content_filter.plugin`](chat_content_filter/chat_content_filter.plugin)
 
-0. Use ExtraGram or AyuGram with applied plugin support.
-1. Download and send the `chat_content_filter.plugin` to any chat (for example, in the saved messages).
-2. Click on this file in chat, check next to "Enable After Installation" and click "Install".
+A plugin developed by me for quick and seamless filtering of various message types in an open chat.
+
+### Features:
+- Long press on the 👁️ icon in the chat header opens settings for the message types you want to see (voice messages, video messages, stickers, media, etc.).
+- Short tap on the 👁️ icon toggles filtering on the fly.
+- Toggling the filter preserves the exact message viewing position.
+- Ukrainian and English localizations can be selected in the plugin settings.
+
+## 2. Advanced Search 
+
+[`advanced_search.plugin`](advanced_search/advanced_search.plugin)
+
+Advanced search across messages, media, and files with deep filtering and an adaptive Material 3 interface.
+
+The plugin was originally developed by [@dekma0091](https://t.me/dekma0091), and this can be considered a fork where I strive to improve its functionality.
+
+## Plugin Installation:
+1. Download the plugin file ([`chat_content_filter.plugin`](chat_content_filter/chat_content_filter.plugin) or [`advanced_search.plugin`](advanced_search/advanced_search.plugin)) and send it to any chat in your Telegram (e.g., Saved Messages).
+2. Tap the file in the chat, check "Enable after installation", and confirm the installation.
