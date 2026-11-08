@@ -38,7 +38,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class AdvancedSearchCore {
-    private static final String BUTTON_TAG = "extera_advanced_search_btn";
+    private static final String BUTTON_TAG = "extera_advanced_search_btn_v141";
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private static final TimeInterpolator EASE_OUT_QUINT = new TimeInterpolator() {
@@ -65,7 +65,12 @@ public final class AdvancedSearchCore {
         hookChatActivity();
         hookBaseFragment();
         hookLaunchActivity();
-        scanAndAttachActiveViews();
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                scanAndAttachActiveViews();
+            }
+        });
     }
 
     public void unload() {
@@ -87,7 +92,7 @@ public final class AdvancedSearchCore {
     }
 
     public static void removeAttachedButtons() {
-        mainHandler.post(new Runnable() {
+        Runnable r = new Runnable() {
             @Override
             public void run() {
                 try {
@@ -100,16 +105,26 @@ public final class AdvancedSearchCore {
                     }
                 } catch (Throwable ignored) {}
             }
-        });
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            r.run();
+        } else {
+            mainHandler.post(r);
+        }
     }
 
     private static void removeButtonsFromView(View view) {
         if (view == null) return;
         if (view instanceof ViewGroup) {
             ViewGroup vg = (ViewGroup) view;
-            View btn = vg.findViewWithTag(BUTTON_TAG);
-            if (btn != null) {
-                vg.removeView(btn);
+            for (int i = vg.getChildCount() - 1; i >= 0; i--) {
+                View child = vg.getChildAt(i);
+                if (child != null) {
+                    Object tag = child.getTag();
+                    if ("extera_advanced_search_btn".equals(tag) || BUTTON_TAG.equals(tag) || (child.getClass().getName().contains("SearchButton"))) {
+                        vg.removeViewAt(i);
+                    }
+                }
             }
             for (int i = 0; i < vg.getChildCount(); i++) {
                 removeButtonsFromView(vg.getChildAt(i));
@@ -571,8 +586,17 @@ public final class AdvancedSearchCore {
             }
         }
 
-        if (targetContainer.findViewWithTag(BUTTON_TAG) != null) {
-            return;
+        View existingBtn = targetContainer.findViewWithTag(BUTTON_TAG);
+        if (existingBtn != null) {
+            if (existingBtn.getClass() == SearchButton.class) {
+                return;
+            } else {
+                targetContainer.removeView(existingBtn);
+            }
+        }
+        View legacyBtn = targetContainer.findViewWithTag("extera_advanced_search_btn");
+        if (legacyBtn != null) {
+            targetContainer.removeView(legacyBtn);
         }
 
         final Context context = targetContainer.getContext();
@@ -673,8 +697,9 @@ public final class AdvancedSearchCore {
                 }
 
                 long currentPeerId = PeerResolver.resolvePeerId(finalContainer);
+                int currentFolderId = PeerResolver.resolveCurrentFolderId(finalContainer);
                 Context clickContext = v.getContext() != null ? v.getContext() : finalContainer.getContext();
-                AdvancedSearchDialog.show(clickContext, currentPeerId, query);
+                AdvancedSearchDialog.show(clickContext, currentPeerId, query, currentFolderId);
             }
         });
 

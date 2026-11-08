@@ -152,6 +152,43 @@ public class AdvancedSearchDialog {
     private boolean onlyMineSelected = false;
     private TextView onlyMineChipView;
 
+    // --- Variant 1: Smart Filters State ---
+    public static final int SCOPE_THIS_CHAT = 0;
+    public static final int SCOPE_ALL_CHATS = 1;
+    public static final int SCOPE_WHITELIST = 2;
+    public static final int SCOPE_BLACKLIST = 3;
+    private int chatScopeMode = SCOPE_ALL_CHATS;
+    private final List<Long> selectedChatIds = new ArrayList<>();
+    private final Map<Long, String> selectedChatTitles = new HashMap<>();
+    private TextView chatScopeChipView;
+
+    public static final int FOLDER_ALL = 0;
+    public static final int FOLDER_WHITELIST = 1;
+    public static final int FOLDER_BLACKLIST = 2;
+    private int folderFilterMode = FOLDER_ALL;
+    private final Set<Integer> selectedFolderIds = new HashSet<>();
+    private final Map<Integer, String> selectedFolderNames = new HashMap<>();
+    private int selectedFolderId = 0;
+    private String selectedFolderName = null;
+    private TextView folderChipView;
+    private TextView folderArchiveChipView;
+
+    public static final int ARCHIVE_EXCLUDE = 0;
+    public static final int ARCHIVE_INCLUDE = 1;
+    public static final int ARCHIVE_ONLY = 2;
+    private int archiveFilterMode = ARCHIVE_EXCLUDE;
+    private TextView archiveChipView;
+
+    public static final int AUTHOR_ALL = 0;
+    public static final int AUTHOR_WHITELIST = 1;
+    public static final int AUTHOR_BLACKLIST = 2;
+    public static final int AUTHOR_ONLY_ME = 1;
+    public static final int AUTHOR_EXCEPT_ME = 2;
+    public static final int AUTHOR_ONLY_USER = 1;
+    public static final int AUTHOR_EXCEPT_USER = 2;
+    private int authorFilterMode = AUTHOR_ALL;
+    private TextView authorChipView;
+
     private static AdvancedSearchDialog currentInstance = null;
     private static Object playingMessageObj = null;
     private static ImageView playingIconView = null;
@@ -326,17 +363,42 @@ public class AdvancedSearchDialog {
     }
 
     private AdvancedSearchDialog(Context context, long peerId, String initialQuery) {
-        this(context, peerId, initialQuery, 0, null);
+        this(context, peerId, initialQuery, 0, null, 0);
     }
 
     private AdvancedSearchDialog(Context context, long peerId, String initialQuery, long initialUserId, String initialUserName) {
+        this(context, peerId, initialQuery, initialUserId, initialUserName, 0);
+    }
+
+    private AdvancedSearchDialog(Context context, long peerId, String initialQuery, long initialUserId, String initialUserName, int initialFolderId) {
         this.context = context;
         this.isEnglish = isEnglish();
         this.peerId = peerId;
         this.query = initialQuery != null ? initialQuery : "";
-        this.scope = (peerId != 0) ? "chat" : "global";
+        if (peerId != 0) {
+            this.chatScopeMode = SCOPE_THIS_CHAT;
+            this.scope = "chat";
+        } else {
+            this.chatScopeMode = SCOPE_ALL_CHATS;
+            this.scope = "global";
+        }
         this.filterByUserId = initialUserId;
         this.filterByUserName = initialUserName;
+        if (initialUserId != 0) {
+            this.authorFilterMode = AUTHOR_ONLY_USER;
+        }
+
+        if (initialFolderId == 1) {
+            this.archiveFilterMode = ARCHIVE_ONLY;
+        } else if (initialFolderId >= 2) {
+            this.selectedFolderIds.add(initialFolderId);
+            this.selectedFolderNames.put(initialFolderId, PeerResolver.getFolderName(getCurrentAccount(), initialFolderId));
+            this.folderFilterMode = FOLDER_WHITELIST;
+            this.archiveFilterMode = ARCHIVE_EXCLUDE;
+        } else {
+            this.folderFilterMode = FOLDER_ALL;
+            this.archiveFilterMode = ARCHIVE_EXCLUDE;
+        }
     }
 
     private static Context getActivityContext(Context ctx) {
@@ -367,6 +429,10 @@ public class AdvancedSearchDialog {
     }
 
     public static void show(final Context context, final long peerId, final String query) {
+        show(context, peerId, query, 0);
+    }
+
+    public static void show(final Context context, final long peerId, final String query, final int folderId) {
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
@@ -377,13 +443,17 @@ public class AdvancedSearchDialog {
                         currentInstance.restoreFromMinimize();
                         return;
                     }
-                    new AdvancedSearchDialog(actContext, peerId, query).open();
+                    new AdvancedSearchDialog(actContext, peerId, query, 0, null, folderId).open();
                 } catch (Throwable ignored) {}
             }
         });
     }
 
     public static void showWithUser(final Context context, final long peerId, final String query, final long userId, final String userName) {
+        showWithUser(context, peerId, query, userId, userName, 0);
+    }
+
+    public static void showWithUser(final Context context, final long peerId, final String query, final long userId, final String userName, final int folderId) {
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
@@ -394,7 +464,7 @@ public class AdvancedSearchDialog {
                         currentInstance.restoreFromMinimize();
                         return;
                     }
-                    new AdvancedSearchDialog(actContext, peerId, query, userId, userName).open();
+                    new AdvancedSearchDialog(actContext, peerId, query, userId, userName, folderId).open();
                 } catch (Throwable ignored) {}
             }
         });
@@ -701,59 +771,49 @@ public class AdvancedSearchDialog {
         scopeRow.setOrientation(LinearLayout.HORIZONTAL);
         scopeRow.setPadding(dp(16), dp(0), dp(16), dp(6));
 
-        if (peerId != 0) {
-            scopeViews.put("chat", createM3Chip(scopeRow, tr("В этом чате", "This chat"), "chat", true, new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
-                    animateChipClick(v);
-                    scope = "chat";
-                    updateScopeStyles();
-                    triggerSearchDelayed();
-                }
-            }, "chat"));
-
-            scopeViews.put("global", createM3Chip(scopeRow, tr("По всем чатам", "All chats"), "global", false, new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
-                    animateChipClick(v);
-                    scope = "global";
-                    updateScopeStyles();
-                    triggerSearchDelayed();
-                }
-            }, "global"));
-        }
-
-        onlyMineChipView = createM3Chip(scopeRow, tr("Только мои", "Only mine"), "only_mine", false, new View.OnClickListener() {
+        // 1. Chat Scope Smart Pill
+        chatScopeChipView = createM3Chip(scopeRow, getChatScopeTitle(), "scope_chip", isChatScopeActive(), new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
                 animateChipClick(v);
-                onlyMineSelected = !onlyMineSelected;
-                if (onlyMineSelected) {
-                    int acc = 0;
-                    try {
-                        Class<?> uc = Class.forName("org.telegram.messenger.UserConfig");
-                        acc = uc.getField("selectedAccount").getInt(null);
-                    } catch (Throwable ignored) {}
-                    long myId = getMyUserId(acc);
-                    if (myId != 0) {
-                        filterByUserId = myId;
-                        filterByUserName = tr("Мои сообщения", "My messages");
-                        selectedUserObject = getMyUserObject(acc);
-                        updateUserFilterChip();
-                    }
-                } else {
-                    filterByUserId = 0;
-                    filterByUserName = null;
-                    selectedUserObject = null;
-                    updateUserFilterChip();
-                }
-                updateOnlyMineChipStyle();
-                triggerSearchDelayed();
+                showChatScopeDialog();
             }
-        }, "user");
+        }, getChatScopeIcon());
+
+        // 2. Folder Filter Smart Pill
+        folderChipView = createM3Chip(scopeRow, getFolderTitle(), "folder_chip", isFolderActive(), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
+                animateChipClick(v);
+                showFolderFilterDialog();
+            }
+        }, getFolderIcon());
+        folderArchiveChipView = folderChipView;
+
+        // 3. Author Filter Smart Pill
+        authorChipView = createM3Chip(scopeRow, getAuthorTitle(), "author_chip", isAuthorFilterActive(), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
+                animateChipClick(v);
+                showAuthorFilterDialog();
+            }
+        }, getAuthorIcon());
+
+        // 4. Archive Smart Pill
+        archiveChipView = createM3Chip(scopeRow, getArchiveTitle(), "archive_chip", isArchiveActive(), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                animateChipClick(v);
+                cycleArchiveFilter();
+            }
+        }, getArchiveIcon());
+
+        // Backward compatibility pointer
+        onlyMineChipView = authorChipView;
 
         scopeScroll.addView(scopeRow);
         rootContainer.addView(scopeScroll);
@@ -1502,11 +1562,13 @@ public class AdvancedSearchDialog {
                     filterByUserAccessHash = finalAHash;
                     selectedUserObject = item;
                     filterByUserName = (finalUsername != null && !finalUsername.isEmpty()) ? ("@" + finalUsername) : finalDisplayName;
+                    authorFilterMode = AUTHOR_ONLY_USER;
                     if (searchInputField != null) {
                         searchInputField.setText("");
                     }
                     query = "";
                     hideUserSuggestions();
+                    updateSmartPills();
                     updateUserFilterChip();
                     triggerSearchDelayed();
                 }
@@ -1769,7 +1831,7 @@ public class AdvancedSearchDialog {
     }
 
     private void updateResetButtonVisibility() {
-        boolean hasFilters = !"all".equals(selectedFilter) || !"all".equals(selectedDatePreset) || customMinDate != 0 || customMaxDate != 0 || filterByUserId != 0 || ("video".equals(selectedFilter) && !"date".equals(selectedVideoSort)) || ("document".equals(selectedFilter) && (!"all".equals(selectedDocExt) || !"date".equals(selectedDocSort))) || onlyMineSelected;
+        boolean hasFilters = !"all".equals(selectedFilter) || !"all".equals(selectedDatePreset) || customMinDate != 0 || customMaxDate != 0 || filterByUserId != 0 || ("video".equals(selectedFilter) && !"date".equals(selectedVideoSort)) || ("document".equals(selectedFilter) && (!"all".equals(selectedDocExt) || !"date".equals(selectedDocSort))) || onlyMineSelected || authorFilterMode != AUTHOR_ALL || ((chatScopeMode == SCOPE_WHITELIST || chatScopeMode == SCOPE_BLACKLIST) && !selectedChatIds.isEmpty()) || (folderFilterMode != FOLDER_ALL && !selectedFolderIds.isEmpty()) || archiveFilterMode != ARCHIVE_EXCLUDE;
         if (resetRow != null) {
             if (hasFilters && resetRow.getVisibility() != View.VISIBLE) {
                 resetRow.setVisibility(View.VISIBLE);
@@ -1801,6 +1863,10 @@ public class AdvancedSearchDialog {
         private final String iconType;
         private int color;
         private final int size;
+
+        public String getIconType() {
+            return iconType;
+        }
 
         public VectorIconDrawable(String iconType, int color, int sizePx) {
             this.iconType = iconType != null ? iconType : "";
@@ -1840,7 +1906,47 @@ public class AdvancedSearchDialog {
             sharedPaint.setStrokeWidth(Math.max(1.6f * s, 1.0f));
             sharedFillPaint.setColor(color);
 
-            if ("chat".equals(iconType) || "location".equals(iconType)) {
+            if ("folder".equals(iconType)) {
+                Path p = pathCache.get("folder");
+                if (p == null) {
+                    p = new Path();
+                    p.moveTo(4, 7);
+                    p.lineTo(9.5f, 7);
+                    p.lineTo(11.5f, 9);
+                    p.lineTo(20, 9);
+                    p.lineTo(20, 18);
+                    p.lineTo(4, 18);
+                    p.close();
+                    pathCache.put("folder", p);
+                }
+                canvas.save();
+                canvas.scale(s, s);
+                canvas.drawPath(p, sharedPaint);
+                canvas.restore();
+            } else if ("archive".equals(iconType)) {
+                canvas.drawRoundRect(new RectF(3.5f * s, 5 * s, 20.5f * s, 9 * s), 2 * s, 2 * s, sharedPaint);
+                Path p = pathCache.get("archive");
+                if (p == null) {
+                    p = new Path();
+                    p.moveTo(5, 9);
+                    p.lineTo(5, 19);
+                    p.lineTo(19, 19);
+                    p.lineTo(19, 9);
+                    pathCache.put("archive", p);
+                }
+                canvas.save();
+                canvas.scale(s, s);
+                canvas.drawPath(p, sharedPaint);
+                canvas.restore();
+                canvas.drawLine(10 * s, 13 * s, 14 * s, 13 * s, sharedPaint);
+            } else if ("exclude".equals(iconType)) {
+                canvas.drawCircle(12 * s, 12 * s, 8 * s, sharedPaint);
+                canvas.drawLine(6.5f * s, 6.5f * s, 17.5f * s, 17.5f * s, sharedPaint);
+            } else if ("target".equals(iconType)) {
+                canvas.drawCircle(12 * s, 12 * s, 8.5f * s, sharedPaint);
+                canvas.drawCircle(12 * s, 12 * s, 4f * s, sharedPaint);
+                canvas.drawCircle(12 * s, 12 * s, 1.5f * s, sharedFillPaint);
+            } else if ("chat".equals(iconType) || "location".equals(iconType)) {
                 Path p = pathCache.get("chat");
                 if (p == null) {
                     p = new Path();
@@ -2329,6 +2435,10 @@ public class AdvancedSearchDialog {
         if (!"all".equals(selectedFilter)) return true;
         if (!"all".equals(selectedDatePreset) || customMinDate != 0 || customMaxDate != 0) return true;
         if (filterByUserId != 0 || (filterByUserName != null && !filterByUserName.isEmpty())) return true;
+        if (authorFilterMode != AUTHOR_ALL) return true;
+        if ((chatScopeMode == SCOPE_WHITELIST || chatScopeMode == SCOPE_BLACKLIST) && !selectedChatIds.isEmpty()) return true;
+        if (selectedFolderId != 0 && folderFilterMode != FOLDER_ALL) return true;
+        if (archiveFilterMode != ARCHIVE_EXCLUDE) return true;
         return false;
     }
 
@@ -3428,6 +3538,1611 @@ public class AdvancedSearchDialog {
         }).start();
     }
 
+    private int getCurrentAccount() {
+        try {
+            Class<?> uc = Class.forName("org.telegram.messenger.UserConfig");
+            return uc.getField("selectedAccount").getInt(null);
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
+    private String getChatScopeTitle() {
+        if (chatScopeMode == SCOPE_THIS_CHAT && peerId != 0) {
+            return tr("В этом чате ▾", "This chat ▾");
+        } else if (chatScopeMode == SCOPE_WHITELIST) {
+            if (selectedChatIds.isEmpty()) {
+                return tr("Все чаты ▾", "All chats ▾");
+            } else if (selectedChatIds.size() == 1) {
+                long cid = selectedChatIds.get(0);
+                String title = selectedChatTitles.get(cid);
+                if (title == null) title = PeerResolver.getPeerTitle(context, cid);
+                return title + " ▾";
+            } else {
+                return tr("Выбрано: " + selectedChatIds.size() + " ▾", selectedChatIds.size() + " chats ▾");
+            }
+        } else if (chatScopeMode == SCOPE_BLACKLIST) {
+            if (selectedChatIds.isEmpty()) {
+                return tr("Все чаты ▾", "All chats ▾");
+            } else if (selectedChatIds.size() == 1) {
+                long cid = selectedChatIds.get(0);
+                String title = selectedChatTitles.get(cid);
+                if (title == null) title = PeerResolver.getPeerTitle(context, cid);
+                return tr("Кроме: " + title + " ▾", "Excl: " + title + " ▾");
+            } else {
+                return tr("Исключено: " + selectedChatIds.size() + " ▾", "Excl: " + selectedChatIds.size() + " ▾");
+            }
+        } else {
+            return tr("Все чаты ▾", "All chats ▾");
+        }
+    }
+
+    private String getChatScopeIcon() {
+        if (chatScopeMode == SCOPE_THIS_CHAT && peerId != 0) return "chat";
+        if (chatScopeMode == SCOPE_WHITELIST && !selectedChatIds.isEmpty()) return "target";
+        if (chatScopeMode == SCOPE_BLACKLIST && !selectedChatIds.isEmpty()) return "exclude";
+        return "global";
+    }
+
+    private boolean isChatScopeActive() {
+        if (peerId != 0) {
+            return chatScopeMode != SCOPE_THIS_CHAT;
+        }
+        return (chatScopeMode == SCOPE_WHITELIST || chatScopeMode == SCOPE_BLACKLIST) && !selectedChatIds.isEmpty();
+    }
+
+    private String getFolderTitle() {
+        if (folderFilterMode == FOLDER_ALL || selectedFolderIds.isEmpty()) {
+            return tr("Все папки ▾", "All folders ▾");
+        }
+        int count = selectedFolderIds.size();
+        if (count == 1) {
+            int fid = selectedFolderIds.iterator().next();
+            String fName = selectedFolderNames.get(fid);
+            if (fName == null) fName = PeerResolver.getFolderName(getCurrentAccount(), fid);
+            if (folderFilterMode == FOLDER_BLACKLIST) {
+                return tr("Кроме: ", "Excl: ") + fName + " ▾";
+            } else {
+                return fName + " ▾";
+            }
+        } else {
+            if (folderFilterMode == FOLDER_BLACKLIST) {
+                return tr("Кроме: " + count + " ▾", "Excl: " + count + " ▾");
+            } else {
+                return tr(count + " папок ▾", count + " folders ▾");
+            }
+        }
+    }
+
+    private String getFolderIcon() {
+        if (folderFilterMode == FOLDER_BLACKLIST) return "exclude";
+        return "folder";
+    }
+
+    private boolean isFolderActive() {
+        return folderFilterMode != FOLDER_ALL && !selectedFolderIds.isEmpty();
+    }
+
+    // Backward compatibility aliases
+    private String getFolderArchiveTitle() {
+        return getFolderTitle();
+    }
+
+    private String getFolderArchiveIcon() {
+        return getFolderIcon();
+    }
+
+    private boolean isFolderArchiveActive() {
+        return isFolderActive();
+    }
+
+    private String getArchiveTitle() {
+        switch (archiveFilterMode) {
+            case ARCHIVE_INCLUDE:
+                return tr("+Архив", "+Archive");
+            case ARCHIVE_ONLY:
+                return tr("Только архив", "Only archive");
+            case ARCHIVE_EXCLUDE:
+            default:
+                return tr("Без архива", "No archive");
+        }
+    }
+
+    private String getArchiveIcon() {
+        return "archive";
+    }
+
+    private boolean isArchiveActive() {
+        return archiveFilterMode != ARCHIVE_EXCLUDE;
+    }
+
+    private String getAuthorTitle() {
+        if (authorFilterMode == AUTHOR_ALL) {
+            return tr("Все авторы ▾", "All authors ▾");
+        }
+        String name = filterByUserName != null && !filterByUserName.isEmpty() ? filterByUserName : "@user";
+        if (authorFilterMode == AUTHOR_BLACKLIST) {
+            return tr("Кроме: " + name + " ▾", "Excl: " + name + " ▾");
+        } else {
+            return name + " ▾";
+        }
+    }
+
+    private String getAuthorIcon() {
+        if (authorFilterMode == AUTHOR_BLACKLIST) {
+            return "exclude";
+        }
+        return "user";
+    }
+
+    private boolean isAuthorFilterActive() {
+        return authorFilterMode != AUTHOR_ALL;
+    }
+
+    private void updateSmartPillView(TextView chip, String title, String iconType, boolean active) {
+        if (chip == null) return;
+        chip.setText(title);
+        Object tag = chip.getTag();
+        if (tag instanceof VectorIconDrawable) {
+            VectorIconDrawable vid = (VectorIconDrawable) tag;
+            if (!vid.getIconType().equals(iconType)) {
+                VectorIconDrawable newIcon = new VectorIconDrawable(iconType, active ? getOnSecondaryContainerColor() : getSecondaryTextColor(), dp(15));
+                chip.setTag(newIcon);
+                chip.setCompoundDrawablesWithIntrinsicBounds(newIcon, null, null, null);
+                chip.setCompoundDrawablePadding(dp(6));
+            }
+        }
+        applyM3ChipStyle(chip, active);
+    }
+
+    private void updateSmartPills() {
+        updateSmartPillView(chatScopeChipView, getChatScopeTitle(), getChatScopeIcon(), isChatScopeActive());
+        updateSmartPillView(folderChipView, getFolderTitle(), getFolderIcon(), isFolderActive());
+        updateSmartPillView(authorChipView, getAuthorTitle(), getAuthorIcon(), isAuthorFilterActive());
+        updateSmartPillView(archiveChipView, getArchiveTitle(), getArchiveIcon(), isArchiveActive());
+        updateResetButtonVisibility();
+    }
+
+    private void cycleArchiveFilter() {
+        archiveFilterMode = (archiveFilterMode + 1) % 3;
+        updateSmartPills();
+        triggerSearchDelayed();
+    }
+
+    private void cycleAuthorFilter() {
+        showAuthorFilterDialog();
+    }
+
+    public static class MaxHeightScrollView extends ScrollView {
+        private int maxHeight;
+        public MaxHeightScrollView(Context context, int maxHeight) {
+            super(context);
+            this.maxHeight = maxHeight;
+        }
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            if (maxHeight > 0) {
+                heightMeasureSpec = MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST);
+            }
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        }
+    }
+
+    private Drawable createRadioDrawable(boolean isSelected) {
+        final int color = isSelected ? getAccentColor() : getSecondaryTextColor();
+        final boolean sel = isSelected;
+        return new Drawable() {
+            @Override
+            public void draw(Canvas canvas) {
+                Rect bounds = getBounds();
+                float cx = bounds.exactCenterX();
+                float cy = bounds.exactCenterY();
+                float r = Math.min(bounds.width(), bounds.height()) / 2.0f - dp(2);
+
+                Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(dp(2));
+                p.setColor(color);
+                canvas.drawCircle(cx, cy, r, p);
+
+                if (sel) {
+                    p.setStyle(Paint.Style.FILL);
+                    canvas.drawCircle(cx, cy, r * 0.5f, p);
+                }
+            }
+
+            @Override public void setAlpha(int alpha) {}
+            @Override public void setColorFilter(ColorFilter colorFilter) {}
+            @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+        };
+    }
+
+    private LinearLayout createRadioRow(Context ctx, String title, String subtitle, boolean isSelected, final View.OnClickListener onClick) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        GradientDrawable rowBg = new GradientDrawable();
+        rowBg.setCornerRadius(dp(10));
+        rowBg.setColor(isSelected ? ((getAccentColor() & 0x00FFFFFF) | 0x1A000000) : Color.TRANSPARENT);
+        row.setBackground(rowBg);
+
+        ImageView radio = new ImageView(ctx);
+        radio.setTag("radio_icon");
+        radio.setImageDrawable(createRadioDrawable(isSelected));
+        radio.setLayoutParams(new LinearLayout.LayoutParams(dp(20), dp(20)));
+        row.addView(radio);
+
+        LinearLayout textCol = new LinearLayout(ctx);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tclp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        tclp.leftMargin = dp(12);
+        textCol.setLayoutParams(tclp);
+
+        TextView titleTv = new TextView(ctx);
+        titleTv.setTag("radio_title");
+        titleTv.setText(title);
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f);
+        titleTv.setTextColor(getPrimaryTextColor());
+        titleTv.setTypeface(null, isSelected ? Typeface.BOLD : Typeface.NORMAL);
+        textCol.addView(titleTv);
+
+        if (subtitle != null && !subtitle.isEmpty()) {
+            TextView subTv = new TextView(ctx);
+            subTv.setText(subtitle);
+            subTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            subTv.setTextColor(getSecondaryTextColor());
+            textCol.addView(subTv);
+        }
+        row.addView(textCol);
+
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                if (onClick != null) onClick.onClick(v);
+            }
+        });
+
+        return row;
+    }
+
+    private void updateRadioRowStyle(LinearLayout row, boolean isSelected) {
+        if (row == null) return;
+        GradientDrawable rowBg = (GradientDrawable) row.getBackground();
+        if (rowBg != null) {
+            rowBg.setColor(isSelected ? ((getAccentColor() & 0x00FFFFFF) | 0x1A000000) : Color.TRANSPARENT);
+        }
+        ImageView radio = (ImageView) row.findViewWithTag("radio_icon");
+        if (radio != null) {
+            radio.setImageDrawable(createRadioDrawable(isSelected));
+        }
+        TextView titleTv = (TextView) row.findViewWithTag("radio_title");
+        if (titleTv != null) {
+            titleTv.setTypeface(null, isSelected ? Typeface.BOLD : Typeface.NORMAL);
+        }
+    }
+
+    private Drawable createCheckboxDrawable(boolean isChecked) {
+        final int color = isChecked ? getAccentColor() : getSecondaryTextColor();
+        final boolean checked = isChecked;
+        return new Drawable() {
+            @Override
+            public void draw(Canvas canvas) {
+                Rect bounds = getBounds();
+                float pad = dp(2);
+                RectF rf = new RectF(bounds.left + pad, bounds.top + pad, bounds.right - pad, bounds.bottom - pad);
+                float cr = dp(4);
+
+                Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                if (checked) {
+                    p.setStyle(Paint.Style.FILL);
+                    p.setColor(color);
+                    canvas.drawRoundRect(rf, cr, cr, p);
+
+                    // Checkmark
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setColor(Color.WHITE);
+                    p.setStrokeWidth(dp(2));
+                    p.setStrokeCap(Paint.Cap.ROUND);
+                    p.setStrokeJoin(Paint.Join.ROUND);
+
+                    Path checkPath = new Path();
+                    float w = rf.width();
+                    float h = rf.height();
+                    checkPath.moveTo(rf.left + w * 0.25f, rf.top + h * 0.52f);
+                    checkPath.lineTo(rf.left + w * 0.45f, rf.top + h * 0.72f);
+                    checkPath.lineTo(rf.left + w * 0.75f, rf.top + h * 0.30f);
+                    canvas.drawPath(checkPath, p);
+                } else {
+                    p.setStyle(Paint.Style.STROKE);
+                    p.setStrokeWidth(dp(1.8f));
+                    p.setColor(color);
+                    canvas.drawRoundRect(rf, cr, cr, p);
+                }
+            }
+
+            @Override public void setAlpha(int alpha) {}
+            @Override public void setColorFilter(ColorFilter colorFilter) {}
+            @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+        };
+    }
+
+    private LinearLayout createCheckboxRow(Context ctx, String title, String subtitle, boolean isChecked, final View.OnClickListener onClick) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(8), dp(12), dp(8));
+        GradientDrawable rowBg = new GradientDrawable();
+        rowBg.setCornerRadius(dp(10));
+        rowBg.setColor(isChecked ? ((getAccentColor() & 0x00FFFFFF) | 0x14000000) : Color.TRANSPARENT);
+        row.setBackground(rowBg);
+
+        ImageView cb = new ImageView(ctx);
+        cb.setTag("cb_icon");
+        cb.setImageDrawable(createCheckboxDrawable(isChecked));
+        cb.setLayoutParams(new LinearLayout.LayoutParams(dp(20), dp(20)));
+        row.addView(cb);
+
+        LinearLayout textCol = new LinearLayout(ctx);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tclp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        tclp.leftMargin = dp(12);
+        textCol.setLayoutParams(tclp);
+
+        TextView titleTv = new TextView(ctx);
+        titleTv.setTag("cb_title");
+        titleTv.setText(title);
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        titleTv.setTextColor(getPrimaryTextColor());
+        textCol.addView(titleTv);
+
+        if (subtitle != null && !subtitle.isEmpty()) {
+            TextView subTv = new TextView(ctx);
+            subTv.setTag("cb_sub");
+            subTv.setText(subtitle);
+            subTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            subTv.setTextColor(getSecondaryTextColor());
+            textCol.addView(subTv);
+        }
+        row.addView(textCol);
+
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                if (onClick != null) onClick.onClick(v);
+            }
+        });
+
+        return row;
+    }
+
+    private LinearLayout createAvatarCheckboxRow(Context ctx, String title, String subtitle, View avatarView, boolean isChecked, final View.OnClickListener onClick) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(8), dp(12), dp(8));
+        GradientDrawable rowBg = new GradientDrawable();
+        rowBg.setCornerRadius(dp(10));
+        rowBg.setColor(isChecked ? ((getAccentColor() & 0x00FFFFFF) | 0x14000000) : Color.TRANSPARENT);
+        row.setBackground(rowBg);
+
+        ImageView cb = new ImageView(ctx);
+        cb.setTag("cb_icon");
+        cb.setImageDrawable(createCheckboxDrawable(isChecked));
+        cb.setLayoutParams(new LinearLayout.LayoutParams(dp(20), dp(20)));
+        row.addView(cb);
+
+        if (avatarView != null) {
+            LinearLayout.LayoutParams avLp = new LinearLayout.LayoutParams(dp(32), dp(32));
+            avLp.leftMargin = dp(12);
+            avLp.gravity = Gravity.CENTER_VERTICAL;
+            avatarView.setLayoutParams(avLp);
+            row.addView(avatarView);
+        }
+
+        LinearLayout textCol = new LinearLayout(ctx);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tclp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        tclp.leftMargin = dp(10);
+        textCol.setLayoutParams(tclp);
+
+        TextView titleTv = new TextView(ctx);
+        titleTv.setTag("cb_title");
+        titleTv.setText(title);
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        titleTv.setTextColor(getPrimaryTextColor());
+        titleTv.setSingleLine(true);
+        titleTv.setEllipsize(TextUtils.TruncateAt.END);
+        textCol.addView(titleTv);
+
+        if (subtitle != null && !subtitle.isEmpty()) {
+            TextView subTv = new TextView(ctx);
+            subTv.setTag("cb_sub");
+            subTv.setText(subtitle);
+            subTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            subTv.setTextColor(getSecondaryTextColor());
+            subTv.setSingleLine(true);
+            subTv.setEllipsize(TextUtils.TruncateAt.END);
+            textCol.addView(subTv);
+        }
+        row.addView(textCol);
+
+        if (onClick != null) row.setOnClickListener(onClick);
+        return row;
+    }
+
+    private void updateCheckboxRowStyle(LinearLayout row, boolean isChecked) {
+        if (row == null) return;
+        GradientDrawable rowBg = (GradientDrawable) row.getBackground();
+        if (rowBg != null) {
+            rowBg.setColor(isChecked ? ((getAccentColor() & 0x00FFFFFF) | 0x14000000) : Color.TRANSPARENT);
+        }
+        ImageView cb = (ImageView) row.findViewWithTag("cb_icon");
+        if (cb != null) {
+            cb.setImageDrawable(createCheckboxDrawable(isChecked));
+        }
+    }
+
+    private TextView createDialogApplyBtn(Context ctx, String text, View.OnClickListener l) {
+        TextView btn = new TextView(ctx);
+        btn.setText(text);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        btn.setTextColor(getOnSecondaryContainerColor());
+        btn.setTypeface(null, Typeface.BOLD);
+        btn.setGravity(Gravity.CENTER);
+        btn.setPadding(dp(20), dp(10), dp(20), dp(10));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(getSecondaryContainerColor());
+        bg.setCornerRadius(dp(12));
+        btn.setBackground(bg);
+        btn.setOnClickListener(l);
+        return btn;
+    }
+
+    private TextView createDialogTextBtn(Context ctx, String text, View.OnClickListener l) {
+        TextView btn = new TextView(ctx);
+        btn.setText(text);
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        btn.setTextColor(getSecondaryTextColor());
+        btn.setGravity(Gravity.CENTER);
+        btn.setPadding(dp(16), dp(10), dp(16), dp(10));
+        btn.setOnClickListener(l);
+        return btn;
+    }
+
+    private TextView createSectionHeader(Context ctx, String text) {
+        TextView tv = new TextView(ctx);
+        tv.setText(text);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tv.setTextColor(getAccentColor());
+        tv.setTypeface(null, Typeface.BOLD);
+        tv.setPadding(dp(12), dp(10), dp(12), dp(4));
+        return tv;
+    }
+
+    // --- Dialog 1: Chat Scope Bottom Sheet ---
+    private void showChatScopeDialog() {
+        final Dialog sheetDialog = new Dialog(context, android.R.style.Theme_Translucent_NoTitleBar);
+        final FrameLayout root = new FrameLayout(context);
+        root.setBackgroundColor(0x7F000000);
+
+        int surfaceColor = isDarkTheme() ? getMonetColor("system_neutral1_900", 0xFF141218) : getMonetColor("system_neutral1_50", 0xFFFDF8FD);
+        final int navHeight = getNavigationBarHeight(context);
+
+        final LinearLayout sheet = new LinearLayout(context);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable sheetBg = new GradientDrawable();
+        sheetBg.setColor(surfaceColor);
+        sheetBg.setCornerRadii(new float[]{dp(28), dp(28), dp(28), dp(28), 0, 0, 0, 0});
+        sheet.setBackground(sheetBg);
+        sheet.setPadding(dp(18), dp(14), dp(18), dp(16) + navHeight);
+
+        FrameLayout.LayoutParams sheetLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        sheet.setLayoutParams(sheetLp);
+
+        final Runnable closeAnim = new Runnable() {
+            private boolean closing = false;
+            @Override
+            public void run() {
+                if (closing) return;
+                closing = true;
+                root.animate().alpha(0f).setDuration(220).setInterpolator(EASE_IN_QUINT).start();
+                sheet.animate().translationY(dp(400) + navHeight).setDuration(220).setInterpolator(EASE_IN_QUINT).withEndAction(new Runnable() {
+                    @Override
+                    public void run() {
+                        try { sheetDialog.dismiss(); } catch (Throwable ignored) {}
+                    }
+                }).start();
+            }
+        };
+
+        root.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { closeAnim.run(); }
+        });
+        sheet.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {}
+        });
+
+        // Handle
+        View handle = new View(context);
+        GradientDrawable hBg = new GradientDrawable();
+        hBg.setColor(0x44938F99);
+        hBg.setCornerRadius(dp(2));
+        handle.setBackground(hBg);
+        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(dp(36), dp(4));
+        hLp.gravity = Gravity.CENTER_HORIZONTAL;
+        hLp.bottomMargin = dp(14);
+        sheet.addView(handle, hLp);
+
+        // Title
+        TextView titleTv = new TextView(context);
+        titleTv.setText(tr("Область поиска", "Search scope"));
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        titleTv.setTextColor(getPrimaryTextColor());
+        titleTv.setTypeface(null, Typeface.BOLD);
+        titleTv.setPadding(dp(8), 0, dp(8), dp(8));
+        sheet.addView(titleTv);
+
+        final int currentAccount = getCurrentAccount();
+        final int[] tempMode = new int[]{chatScopeMode};
+        if (tempMode[0] != SCOPE_WHITELIST && tempMode[0] != SCOPE_BLACKLIST) {
+            tempMode[0] = SCOPE_ALL_CHATS;
+        }
+        final List<Long> tempSelectedChatIds = new ArrayList<>(selectedChatIds);
+        final Map<Long, String> tempSelectedTitles = new HashMap<>(selectedChatTitles);
+        final int[] tempSubMode = new int[]{chatScopeMode == SCOPE_BLACKLIST ? SCOPE_BLACKLIST : SCOPE_WHITELIST};
+
+        int maxScrollH = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.55f);
+        MaxHeightScrollView contentScroll = new MaxHeightScrollView(context, maxScrollH);
+        contentScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
+        contentScroll.setLayoutParams(scrollLp);
+
+        final LinearLayout scrollContent = new LinearLayout(context);
+        scrollContent.setOrientation(LinearLayout.VERTICAL);
+
+        final Map<Integer, LinearLayout> radioRows = new HashMap<>();
+
+        // Container for Specific Chats
+        final LinearLayout specificContainer = new LinearLayout(context);
+        specificContainer.setOrientation(LinearLayout.VERTICAL);
+        specificContainer.setPadding(dp(6), dp(6), dp(6), dp(6));
+        specificContainer.setVisibility((tempMode[0] == SCOPE_WHITELIST || tempMode[0] == SCOPE_BLACKLIST) ? View.VISIBLE : View.GONE);
+
+        // Submode buttons: Whitelist vs Blacklist
+        final LinearLayout subModeRow = new LinearLayout(context);
+        subModeRow.setOrientation(LinearLayout.HORIZONTAL);
+        subModeRow.setPadding(0, dp(4), 0, dp(8));
+
+        final TextView btnOnlyThese = new TextView(context);
+        btnOnlyThese.setText(tr("✓ Только эти чаты", "✓ Only these chats"));
+        btnOnlyThese.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        btnOnlyThese.setGravity(Gravity.CENTER);
+        btnOnlyThese.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        final TextView btnExceptThese = new TextView(context);
+        btnExceptThese.setText(tr("🚫 Кроме этих чатов", "🚫 Except these chats"));
+        btnExceptThese.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        btnExceptThese.setGravity(Gravity.CENTER);
+        btnExceptThese.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        LinearLayout.LayoutParams btnLp1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        btnLp1.setMarginEnd(dp(6));
+        btnOnlyThese.setLayoutParams(btnLp1);
+        btnExceptThese.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        final Runnable updateSubModeStyles = new Runnable() {
+            @Override
+            public void run() {
+                applyM3ChipStyle(btnOnlyThese, tempSubMode[0] == SCOPE_WHITELIST);
+                applyM3ChipStyle(btnExceptThese, tempSubMode[0] == SCOPE_BLACKLIST);
+            }
+        };
+        updateSubModeStyles.run();
+
+        btnOnlyThese.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                tempSubMode[0] = SCOPE_WHITELIST;
+                tempMode[0] = SCOPE_WHITELIST;
+                updateSubModeStyles.run();
+            }
+        });
+
+        btnExceptThese.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                tempSubMode[0] = SCOPE_BLACKLIST;
+                tempMode[0] = SCOPE_BLACKLIST;
+                updateSubModeStyles.run();
+            }
+        });
+
+        subModeRow.addView(btnOnlyThese);
+        subModeRow.addView(btnExceptThese);
+        specificContainer.addView(subModeRow);
+
+        // Input row
+        final LinearLayout inputRow = new LinearLayout(context);
+        inputRow.setOrientation(LinearLayout.HORIZONTAL);
+        inputRow.setGravity(Gravity.CENTER_VERTICAL);
+        inputRow.setPadding(0, dp(4), 0, dp(8));
+
+        final EditText chatInputEt = new EditText(context);
+        chatInputEt.setHint(tr("@username, ID или ссылка...", "@username, ID or link..."));
+        chatInputEt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f);
+        chatInputEt.setTextColor(getPrimaryTextColor());
+        chatInputEt.setHintTextColor(getSecondaryTextColor());
+        chatInputEt.setPadding(dp(12), dp(9), dp(12), dp(9));
+        GradientDrawable ciBg = new GradientDrawable();
+        ciBg.setColor(getSurfaceContainerLowColor());
+        ciBg.setCornerRadius(dp(8));
+        chatInputEt.setBackground(ciBg);
+        LinearLayout.LayoutParams ciLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        ciLp.setMarginEnd(dp(8));
+        chatInputEt.setLayoutParams(ciLp);
+        inputRow.addView(chatInputEt);
+
+        final TextView addBtn = new TextView(context);
+        addBtn.setText(tr("+ Добавить", "+ Add"));
+        addBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        addBtn.setTextColor(getOnSecondaryContainerColor());
+        addBtn.setTypeface(null, Typeface.BOLD);
+        addBtn.setPadding(dp(14), dp(9), dp(14), dp(9));
+        GradientDrawable abBg = new GradientDrawable();
+        abBg.setColor(getSecondaryContainerColor());
+        abBg.setCornerRadius(dp(8));
+        addBtn.setBackground(abBg);
+        inputRow.addView(addBtn);
+
+        specificContainer.addView(inputRow);
+
+        // Chips flow layout
+        final LinearLayout chipsFlow = new LinearLayout(context);
+        chipsFlow.setOrientation(LinearLayout.VERTICAL);
+        chipsFlow.setPadding(0, dp(2), 0, dp(6));
+        specificContainer.addView(chipsFlow);
+
+        final Map<Long, LinearLayout> chatRowsMap = new HashMap<>();
+
+        final Runnable[] refreshSelectedChips = new Runnable[1];
+        refreshSelectedChips[0] = new Runnable() {
+            @Override
+            public void run() {
+                chipsFlow.removeAllViews();
+                if (tempSelectedChatIds.isEmpty()) {
+                    chipsFlow.setVisibility(View.GONE);
+                    return;
+                }
+                chipsFlow.setVisibility(View.VISIBLE);
+
+                LinearLayout currentRow = null;
+                for (final Long cid : new ArrayList<>(tempSelectedChatIds)) {
+                    String title = tempSelectedTitles.get(cid);
+                    if (title == null) {
+                        title = PeerResolver.getPeerTitle(context, cid);
+                        tempSelectedTitles.put(cid, title);
+                    }
+
+                    if (currentRow == null || currentRow.getChildCount() >= 2) {
+                        currentRow = new LinearLayout(context);
+                        currentRow.setOrientation(LinearLayout.HORIZONTAL);
+                        currentRow.setPadding(0, 0, 0, dp(6));
+                        chipsFlow.addView(currentRow);
+                    }
+
+                    TextView chip = new TextView(context);
+                    chip.setText(title + "  ✕");
+                    chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                    chip.setTextColor(getPrimaryTextColor());
+                    chip.setPadding(dp(10), dp(5), dp(10), dp(5));
+                    GradientDrawable cBg = new GradientDrawable();
+                    cBg.setColor(getSecondaryContainerColor());
+                    cBg.setCornerRadius(dp(16));
+                    chip.setBackground(cBg);
+
+                    LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                    clp.setMarginEnd(dp(6));
+                    chip.setLayoutParams(clp);
+
+                    chip.setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                            tempSelectedChatIds.remove(cid);
+                            tempSelectedTitles.remove(cid);
+                            LinearLayout row = chatRowsMap.get(cid);
+                            if (row != null) {
+                                updateCheckboxRowStyle(row, false);
+                            }
+                            refreshSelectedChips[0].run();
+                        }
+                    });
+                    currentRow.addView(chip);
+                }
+            }
+        };
+        refreshSelectedChips[0].run();
+
+        addBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                String txt = chatInputEt.getText() != null ? chatInputEt.getText().toString().trim() : "";
+                if (txt.isEmpty()) return;
+                long resolved = PeerResolver.resolvePeerFromString(currentAccount, txt);
+                if (resolved != 0) {
+                    if (!tempSelectedChatIds.contains(resolved)) {
+                        tempSelectedChatIds.add(resolved);
+                        String t = PeerResolver.getPeerTitle(context, resolved);
+                        tempSelectedTitles.put(resolved, t);
+                        LinearLayout r = chatRowsMap.get(resolved);
+                        if (r != null) {
+                            updateCheckboxRowStyle(r, true);
+                        }
+                        refreshSelectedChips[0].run();
+                    }
+                    chatInputEt.setText("");
+                } else {
+                    performHaptic(chatInputEt, HapticFeedbackConstants.KEYBOARD_TAP);
+                    chatInputEt.animate().translationX(dp(6)).setDuration(50).withEndAction(new Runnable() {
+                        @Override public void run() {
+                            chatInputEt.animate().translationX(-dp(6)).setDuration(50).withEndAction(new Runnable() {
+                                @Override public void run() { chatInputEt.animate().translationX(0f).setDuration(50).start(); }
+                            }).start();
+                        }
+                    }).start();
+                }
+            }
+        });
+
+        View.OnClickListener modeClick = new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                int clicked = (int) v.getTag();
+                tempMode[0] = clicked;
+                for (Map.Entry<Integer, LinearLayout> e : radioRows.entrySet()) {
+                    updateRadioRowStyle(e.getValue(), e.getKey() == clicked);
+                }
+                boolean isSpecific = (clicked == SCOPE_WHITELIST || clicked == SCOPE_BLACKLIST);
+                specificContainer.setVisibility(isSpecific ? View.VISIBLE : View.GONE);
+            }
+        };
+
+        LinearLayout rAll = createRadioRow(context, tr("Все чаты", "All chats"), tr("Искать везде без ограничений", "Search everywhere across all dialogs"), tempMode[0] == SCOPE_ALL_CHATS, modeClick);
+        rAll.setTag(SCOPE_ALL_CHATS);
+        radioRows.put(SCOPE_ALL_CHATS, rAll);
+        scrollContent.addView(rAll);
+
+        boolean isSpec = tempMode[0] == SCOPE_WHITELIST || tempMode[0] == SCOPE_BLACKLIST;
+        LinearLayout rSpecific = createRadioRow(context, tr("Конкретные чаты", "Specific chats"), tr("Указать @username, ID или выбрать из списка", "Specify @username, ID or pick from list"), isSpec, modeClick);
+        rSpecific.setTag(SCOPE_WHITELIST);
+        radioRows.put(SCOPE_WHITELIST, rSpecific);
+        scrollContent.addView(rSpecific);
+
+        final LinearLayout dialogsListLayout = new LinearLayout(context);
+        dialogsListLayout.setOrientation(LinearLayout.VERTICAL);
+
+        chatInputEt.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override
+            public void afterTextChanged(Editable s) {
+                String q = s != null ? s.toString().trim().toLowerCase(Locale.ROOT) : "";
+                if (q.startsWith("@")) q = q.substring(1);
+                for (int i = 0; i < dialogsListLayout.getChildCount(); i++) {
+                    View child = dialogsListLayout.getChildAt(i);
+                    Object tag = child.getTag();
+                    if (tag instanceof String) {
+                        String titleStr = (String) tag;
+                        boolean visible = q.isEmpty() || titleStr.contains(q);
+                        child.setVisibility(visible ? View.VISIBLE : View.GONE);
+                    }
+                }
+            }
+        });
+
+        List<Long> allDialogIds = PeerResolver.getAllDialogIds(currentAccount);
+        if (!allDialogIds.isEmpty()) {
+            TextView listHeader = createSectionHeader(context, tr("НЕДАВНИЕ ДИАЛОГИ (НАЖМИТЕ ДЛЯ ВЫБОРА)", "RECENT DIALOGS (TAP TO PICK)"));
+            specificContainer.addView(listHeader);
+
+            for (final Long did : allDialogIds) {
+                final String dTitle = PeerResolver.getPeerTitle(context, did);
+                String dUsername = PeerResolver.getPeerUsername(currentAccount, did);
+                String dSub = dUsername != null ? "@" + dUsername : (did > 0 ? tr("Пользователь", "User") : tr("Группа / Канал", "Group / Channel"));
+                Object userOrChat = PeerResolver.getUserOrChatObject(currentAccount, did);
+                View avView = createAvatarView(currentAccount, userOrChat, did, dTitle);
+
+                final LinearLayout cRow = createAvatarCheckboxRow(context, dTitle, dSub, avView, tempSelectedChatIds.contains(did), null);
+                cRow.setTag((dTitle + " " + (dUsername != null ? dUsername : "")).toLowerCase(Locale.ROOT));
+                cRow.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                        if (tempSelectedChatIds.contains(did)) {
+                            tempSelectedChatIds.remove(did);
+                            updateCheckboxRowStyle(cRow, false);
+                        } else {
+                            tempSelectedChatIds.add(did);
+                            tempSelectedTitles.put(did, dTitle);
+                            updateCheckboxRowStyle(cRow, true);
+                        }
+                        if (refreshSelectedChips[0] != null) refreshSelectedChips[0].run();
+                    }
+                });
+                chatRowsMap.put(did, cRow);
+                dialogsListLayout.addView(cRow);
+            }
+            specificContainer.addView(dialogsListLayout);
+        }
+
+        scrollContent.addView(specificContainer);
+        contentScroll.addView(scrollContent);
+        sheet.addView(contentScroll);
+
+        // Fixed Action Buttons Row at bottom
+        LinearLayout actionsRow = new LinearLayout(context);
+        actionsRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionsRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        actionsRow.setPadding(0, dp(14), 0, 0);
+
+        actionsRow.addView(createDialogTextBtn(context, tr("Отмена", "Cancel"), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
+                closeAnim.run();
+            }
+        }));
+
+        actionsRow.addView(createDialogApplyBtn(context, tr("Применить", "Apply"), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
+
+                String leftover = chatInputEt.getText() != null ? chatInputEt.getText().toString().trim() : "";
+                if (!leftover.isEmpty()) {
+                    long res = PeerResolver.resolvePeerFromString(currentAccount, leftover);
+                    if (res != 0 && !tempSelectedChatIds.contains(res)) {
+                        tempSelectedChatIds.add(res);
+                        tempSelectedTitles.put(res, PeerResolver.getPeerTitle(context, res));
+                    }
+                }
+
+                if (tempMode[0] == SCOPE_WHITELIST || tempMode[0] == SCOPE_BLACKLIST) {
+                    if (tempSelectedChatIds.isEmpty()) {
+                        chatScopeMode = SCOPE_ALL_CHATS;
+                    } else {
+                        chatScopeMode = tempSubMode[0];
+                    }
+                } else {
+                    chatScopeMode = tempMode[0];
+                }
+
+                selectedChatIds.clear();
+                selectedChatIds.addAll(tempSelectedChatIds);
+                selectedChatTitles.clear();
+                selectedChatTitles.putAll(tempSelectedTitles);
+
+                updateSmartPills();
+                closeAnim.run();
+                triggerSearchDelayed();
+            }
+        }));
+
+        sheet.addView(actionsRow);
+        root.addView(sheet);
+        sheetDialog.setContentView(root);
+
+        sheet.setTranslationY(dp(400) + navHeight);
+        root.setAlpha(0f);
+        sheetDialog.show();
+        root.animate().alpha(1f).setDuration(220).setInterpolator(EASE_OUT_QUINT).start();
+        sheet.animate().translationY(0f).setDuration(220).setInterpolator(EASE_OUT_QUINT).start();
+    }
+
+    // --- Dialog 2: Folder Filter Bottom Sheet ---
+    private void showFolderFilterDialog() {
+        final Dialog sheetDialog = new Dialog(context, android.R.style.Theme_Translucent_NoTitleBar);
+        final FrameLayout root = new FrameLayout(context);
+        root.setBackgroundColor(0x7F000000);
+
+        int surfaceColor = isDarkTheme() ? getMonetColor("system_neutral1_900", 0xFF141218) : getMonetColor("system_neutral1_50", 0xFFFDF8FD);
+        final int navHeight = getNavigationBarHeight(context);
+
+        final LinearLayout sheet = new LinearLayout(context);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable sheetBg = new GradientDrawable();
+        sheetBg.setColor(surfaceColor);
+        sheetBg.setCornerRadii(new float[]{dp(28), dp(28), dp(28), dp(28), 0, 0, 0, 0});
+        sheet.setBackground(sheetBg);
+        sheet.setPadding(dp(18), dp(14), dp(18), dp(16) + navHeight);
+
+        FrameLayout.LayoutParams sheetLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        sheet.setLayoutParams(sheetLp);
+
+        final Runnable closeAnim = new Runnable() {
+            private boolean closing = false;
+            @Override
+            public void run() {
+                if (closing) return;
+                closing = true;
+                root.animate().alpha(0f).setDuration(220).setInterpolator(EASE_IN_QUINT).start();
+                sheet.animate().translationY(dp(400) + navHeight).setDuration(220).setInterpolator(EASE_IN_QUINT).withEndAction(new Runnable() {
+                    @Override
+                    public void run() {
+                        try { sheetDialog.dismiss(); } catch (Throwable ignored) {}
+                    }
+                }).start();
+            }
+        };
+
+        root.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { closeAnim.run(); }
+        });
+        sheet.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {}
+        });
+
+        View handle = new View(context);
+        GradientDrawable hBg = new GradientDrawable();
+        hBg.setColor(0x44938F99);
+        hBg.setCornerRadius(dp(2));
+        handle.setBackground(hBg);
+        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(dp(36), dp(4));
+        hLp.gravity = Gravity.CENTER_HORIZONTAL;
+        hLp.bottomMargin = dp(14);
+        sheet.addView(handle, hLp);
+
+        TextView titleTv = new TextView(context);
+        titleTv.setText(tr("Папки поиска", "Search folders"));
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        titleTv.setTextColor(getPrimaryTextColor());
+        titleTv.setTypeface(null, Typeface.BOLD);
+        titleTv.setPadding(dp(8), 0, dp(8), dp(8));
+        sheet.addView(titleTv);
+
+        final int currentAccount = getCurrentAccount();
+        final int[] tempFolderMode = new int[]{folderFilterMode};
+        if (tempFolderMode[0] != FOLDER_WHITELIST && tempFolderMode[0] != FOLDER_BLACKLIST) {
+            tempFolderMode[0] = FOLDER_ALL;
+        }
+        final Set<Integer> tempSelectedFolderIds = new HashSet<>(selectedFolderIds);
+        final Map<Integer, String> tempSelectedFolderNames = new HashMap<>(selectedFolderNames);
+
+        int maxScrollH = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.55f);
+        MaxHeightScrollView contentScroll = new MaxHeightScrollView(context, maxScrollH);
+        contentScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
+        contentScroll.setLayoutParams(scrollLp);
+
+        final LinearLayout scrollContent = new LinearLayout(context);
+        scrollContent.setOrientation(LinearLayout.VERTICAL);
+
+        final Map<Integer, LinearLayout> folderMainRows = new HashMap<>();
+        final LinearLayout specificFolderContainer = new LinearLayout(context);
+        specificFolderContainer.setOrientation(LinearLayout.VERTICAL);
+        specificFolderContainer.setPadding(dp(6), dp(4), dp(6), dp(6));
+        specificFolderContainer.setVisibility(tempFolderMode[0] != FOLDER_ALL ? View.VISIBLE : View.GONE);
+
+        // Submode toggle: Whitelist vs Blacklist
+        final LinearLayout folderToggleRow = new LinearLayout(context);
+        folderToggleRow.setOrientation(LinearLayout.HORIZONTAL);
+        folderToggleRow.setPadding(0, dp(4), 0, dp(8));
+
+        final TextView btnInclude = new TextView(context);
+        btnInclude.setText(tr("✓ Только в этих папках", "✓ Only in these folders"));
+        btnInclude.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        btnInclude.setGravity(Gravity.CENTER);
+        btnInclude.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        final TextView btnExclude = new TextView(context);
+        btnExclude.setText(tr("🚫 Кроме этих папок", "🚫 Except these folders"));
+        btnExclude.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        btnExclude.setGravity(Gravity.CENTER);
+        btnExclude.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        LinearLayout.LayoutParams tglLp1 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        tglLp1.setMarginEnd(dp(6));
+        btnInclude.setLayoutParams(tglLp1);
+        btnExclude.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        final Runnable updateFolderToggle = new Runnable() {
+            @Override
+            public void run() {
+                applyM3ChipStyle(btnInclude, tempFolderMode[0] == FOLDER_WHITELIST);
+                applyM3ChipStyle(btnExclude, tempFolderMode[0] == FOLDER_BLACKLIST);
+            }
+        };
+        updateFolderToggle.run();
+
+        btnInclude.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                tempFolderMode[0] = FOLDER_WHITELIST;
+                updateFolderToggle.run();
+            }
+        });
+
+        btnExclude.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                tempFolderMode[0] = FOLDER_BLACKLIST;
+                updateFolderToggle.run();
+            }
+        });
+
+        folderToggleRow.addView(btnInclude);
+        folderToggleRow.addView(btnExclude);
+        specificFolderContainer.addView(folderToggleRow);
+
+        // Fetch user's Telegram folders
+        final Map<Integer, LinearLayout> folderItemRows = new HashMap<>();
+        List<Object[]> availableFolders = new ArrayList<>();
+        try {
+            Class<?> mcClass = Class.forName("org.telegram.messenger.MessagesController");
+            Method getInstance = mcClass.getMethod("getInstance", int.class);
+            Object mcInst = getInstance.invoke(null, currentAccount);
+            Field dfF = mcClass.getField("dialogFilters");
+            List<?> dfs = (List<?>) dfF.get(mcInst);
+            if (dfs != null) {
+                for (Object f : dfs) {
+                    if (f != null) {
+                        int fid = f.getClass().getField("id").getInt(f);
+                        String fname = f.getClass().getField("name").get(f).toString();
+                        // Exclude Archive (id=1) since it has its own dedicated pill!
+                        if (fid > 1 && !fname.equalsIgnoreCase("ALL_CHATS") && !fname.equalsIgnoreCase("Все чаты") && !fname.equalsIgnoreCase("All chats")) {
+                            availableFolders.add(new Object[]{fid, fname});
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        for (final Object[] fEntry : availableFolders) {
+            final int fid = (Integer) fEntry[0];
+            final String fname = (String) fEntry[1];
+            final LinearLayout rF = createCheckboxRow(context, fname, null, tempSelectedFolderIds.contains(fid), null);
+            rF.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                    if (tempSelectedFolderIds.contains(fid)) {
+                        tempSelectedFolderIds.remove(fid);
+                        tempSelectedFolderNames.remove(fid);
+                        updateCheckboxRowStyle(rF, false);
+                    } else {
+                        tempSelectedFolderIds.add(fid);
+                        tempSelectedFolderNames.put(fid, fname);
+                        updateCheckboxRowStyle(rF, true);
+                    }
+                }
+            });
+            folderItemRows.put(fid, rF);
+            specificFolderContainer.addView(rF);
+        }
+
+        View.OnClickListener mainFolderClick = new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                int clicked = (int) v.getTag();
+                if (clicked == FOLDER_ALL) {
+                    tempFolderMode[0] = FOLDER_ALL;
+                    specificFolderContainer.setVisibility(View.GONE);
+                } else {
+                    if (tempFolderMode[0] == FOLDER_ALL) tempFolderMode[0] = FOLDER_WHITELIST;
+                    specificFolderContainer.setVisibility(View.VISIBLE);
+                    updateFolderToggle.run();
+                }
+                for (Map.Entry<Integer, LinearLayout> e : folderMainRows.entrySet()) {
+                    updateRadioRowStyle(e.getValue(), e.getKey() == clicked);
+                }
+            }
+        };
+
+        LinearLayout rFolderAll = createRadioRow(context, tr("Все папки (без фильтра)", "All folders (No filter)"), tr("Искать во всех папках", "Search in all folders"), tempFolderMode[0] == FOLDER_ALL, mainFolderClick);
+        rFolderAll.setTag(FOLDER_ALL);
+        folderMainRows.put(FOLDER_ALL, rFolderAll);
+        scrollContent.addView(rFolderAll);
+
+        boolean isSpecFolder = tempFolderMode[0] != FOLDER_ALL;
+        LinearLayout rFolderSpec = createRadioRow(context, tr("Выбрать папки", "Specific folders"), tr("Включить или исключить выбранные папки", "Select folders to include or exclude"), isSpecFolder, mainFolderClick);
+        rFolderSpec.setTag(FOLDER_WHITELIST);
+        folderMainRows.put(FOLDER_WHITELIST, rFolderSpec);
+        scrollContent.addView(rFolderSpec);
+
+        scrollContent.addView(specificFolderContainer);
+        contentScroll.addView(scrollContent);
+        sheet.addView(contentScroll);
+
+        // Fixed Action Buttons Row at bottom
+        LinearLayout actionsRow = new LinearLayout(context);
+        actionsRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionsRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        actionsRow.setPadding(0, dp(14), 0, 0);
+
+        actionsRow.addView(createDialogTextBtn(context, tr("Отмена", "Cancel"), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
+                closeAnim.run();
+            }
+        }));
+
+        actionsRow.addView(createDialogApplyBtn(context, tr("Применить", "Apply"), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
+
+                if (tempFolderMode[0] == FOLDER_ALL || tempSelectedFolderIds.isEmpty()) {
+                    folderFilterMode = FOLDER_ALL;
+                } else {
+                    folderFilterMode = tempFolderMode[0];
+                }
+
+                selectedFolderIds.clear();
+                selectedFolderIds.addAll(tempSelectedFolderIds);
+                selectedFolderNames.clear();
+                selectedFolderNames.putAll(tempSelectedFolderNames);
+
+                updateSmartPills();
+                closeAnim.run();
+                triggerSearchDelayed();
+            }
+        }));
+
+        sheet.addView(actionsRow);
+        root.addView(sheet);
+        sheetDialog.setContentView(root);
+
+        sheet.setTranslationY(dp(400) + navHeight);
+        root.setAlpha(0f);
+        sheetDialog.show();
+        root.animate().alpha(1f).setDuration(220).setInterpolator(EASE_OUT_QUINT).start();
+        sheet.animate().translationY(0f).setDuration(220).setInterpolator(EASE_OUT_QUINT).start();
+    }
+
+    // --- Dialog 3: Author Filter Bottom Sheet ---
+    private void showAuthorFilterDialog() {
+        final Dialog sheetDialog = new Dialog(context, android.R.style.Theme_Translucent_NoTitleBar);
+        final FrameLayout root = new FrameLayout(context);
+        root.setBackgroundColor(0x7F000000);
+
+        int surfaceColor = isDarkTheme() ? getMonetColor("system_neutral1_900", 0xFF141218) : getMonetColor("system_neutral1_50", 0xFFFDF8FD);
+        final int navHeight = getNavigationBarHeight(context);
+
+        final LinearLayout sheet = new LinearLayout(context);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable sheetBg = new GradientDrawable();
+        sheetBg.setColor(surfaceColor);
+        sheetBg.setCornerRadii(new float[]{dp(28), dp(28), dp(28), dp(28), 0, 0, 0, 0});
+        sheet.setBackground(sheetBg);
+        sheet.setPadding(dp(18), dp(14), dp(18), dp(16) + navHeight);
+
+        FrameLayout.LayoutParams sheetLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        sheet.setLayoutParams(sheetLp);
+
+        final Runnable closeAnim = new Runnable() {
+            private boolean closing = false;
+            @Override
+            public void run() {
+                if (closing) return;
+                closing = true;
+                root.animate().alpha(0f).setDuration(220).setInterpolator(EASE_IN_QUINT).start();
+                sheet.animate().translationY(dp(400) + navHeight).setDuration(220).setInterpolator(EASE_IN_QUINT).withEndAction(new Runnable() {
+                    @Override
+                    public void run() {
+                        try { sheetDialog.dismiss(); } catch (Throwable ignored) {}
+                    }
+                }).start();
+            }
+        };
+
+        root.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { closeAnim.run(); }
+        });
+        sheet.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {}
+        });
+
+        View handle = new View(context);
+        GradientDrawable hBg = new GradientDrawable();
+        hBg.setColor(0x44938F99);
+        hBg.setCornerRadius(dp(2));
+        handle.setBackground(hBg);
+        LinearLayout.LayoutParams hLp = new LinearLayout.LayoutParams(dp(36), dp(4));
+        hLp.gravity = Gravity.CENTER_HORIZONTAL;
+        hLp.bottomMargin = dp(14);
+        sheet.addView(handle, hLp);
+
+        TextView titleTv = new TextView(context);
+        titleTv.setText(tr("Фильтр по автору", "Author filter"));
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        titleTv.setTextColor(getPrimaryTextColor());
+        titleTv.setTypeface(null, Typeface.BOLD);
+        titleTv.setPadding(dp(8), 0, dp(8), dp(8));
+        sheet.addView(titleTv);
+
+        final int currentAccount = getCurrentAccount();
+        final int[] tempAuthorMode = new int[]{authorFilterMode == AUTHOR_ALL ? AUTHOR_ALL : (authorFilterMode == AUTHOR_BLACKLIST ? AUTHOR_BLACKLIST : AUTHOR_WHITELIST)};
+        final String[] tempUserName = new String[]{filterByUserName};
+        final long[] tempUserId = new long[]{filterByUserId};
+
+        int maxScrollH = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.55f);
+        MaxHeightScrollView contentScroll = new MaxHeightScrollView(context, maxScrollH);
+        contentScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
+        contentScroll.setLayoutParams(scrollLp);
+
+        final LinearLayout scrollContent = new LinearLayout(context);
+        scrollContent.setOrientation(LinearLayout.VERTICAL);
+
+        final Map<Integer, LinearLayout> authorRadioRows = new HashMap<>();
+
+        final LinearLayout userEditContainer = new LinearLayout(context);
+        userEditContainer.setOrientation(LinearLayout.VERTICAL);
+        userEditContainer.setPadding(dp(6), dp(6), dp(6), dp(6));
+        userEditContainer.setVisibility(tempAuthorMode[0] != AUTHOR_ALL ? View.VISIBLE : View.GONE);
+
+        final LinearLayout userToggleRow = new LinearLayout(context);
+        userToggleRow.setOrientation(LinearLayout.HORIZONTAL);
+        userToggleRow.setPadding(0, dp(4), 0, dp(8));
+
+        final TextView btnInclude = new TextView(context);
+        btnInclude.setText(tr("✓ Только этот автор", "✓ Only this author"));
+        btnInclude.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        btnInclude.setGravity(Gravity.CENTER);
+        btnInclude.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        final TextView btnExclude = new TextView(context);
+        btnExclude.setText(tr("🚫 Кроме этого автора", "🚫 Except this author"));
+        btnExclude.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        btnExclude.setGravity(Gravity.CENTER);
+        btnExclude.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+        LinearLayout.LayoutParams tglLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f);
+        tglLp.setMarginEnd(dp(6));
+        btnInclude.setLayoutParams(tglLp);
+        btnExclude.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f));
+
+        final Runnable updateToggleStyles = new Runnable() {
+            @Override
+            public void run() {
+                applyM3ChipStyle(btnInclude, tempAuthorMode[0] == AUTHOR_WHITELIST);
+                applyM3ChipStyle(btnExclude, tempAuthorMode[0] == AUTHOR_BLACKLIST);
+            }
+        };
+        updateToggleStyles.run();
+
+        btnInclude.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                tempAuthorMode[0] = AUTHOR_WHITELIST;
+                updateToggleStyles.run();
+            }
+        });
+
+        btnExclude.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                tempAuthorMode[0] = AUTHOR_BLACKLIST;
+                updateToggleStyles.run();
+            }
+        });
+
+        userToggleRow.addView(btnInclude);
+        userToggleRow.addView(btnExclude);
+        userEditContainer.addView(userToggleRow);
+
+        final EditText userEt = new EditText(context);
+        userEt.setHint(tr("@username или числовой ID", "@username or numeric ID"));
+        if (tempUserName[0] != null && !tempUserName[0].equals(tr("Мои сообщения", "My messages")) && !tempUserName[0].equals(tr("Кроме моих", "Except mine"))) {
+            userEt.setText(tempUserName[0]);
+        }
+        userEt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        userEt.setTextColor(getPrimaryTextColor());
+        userEt.setHintTextColor(getSecondaryTextColor());
+        userEt.setPadding(dp(12), dp(10), dp(12), dp(10));
+        GradientDrawable uetBg = new GradientDrawable();
+        uetBg.setColor(getSurfaceContainerLowColor());
+        uetBg.setCornerRadius(dp(8));
+        userEt.setBackground(uetBg);
+        userEditContainer.addView(userEt);
+
+        // Recent Authors List
+        final Map<Long, LinearLayout> authorRowViews = new HashMap<>();
+        final LinearLayout authorsListLayout = new LinearLayout(context);
+        authorsListLayout.setOrientation(LinearLayout.VERTICAL);
+        authorsListLayout.setPadding(0, dp(8), 0, 0);
+
+        final Runnable updateAuthorRowChecks = new Runnable() {
+            @Override
+            public void run() {
+                for (Map.Entry<Long, LinearLayout> e : authorRowViews.entrySet()) {
+                    boolean isChecked = tempUserId[0] != 0 && tempUserId[0] == e.getKey();
+                    updateCheckboxRowStyle(e.getValue(), isChecked);
+                }
+            }
+        };
+
+        TextView authorsHeader = createSectionHeader(context, tr("НЕДАВНИЕ АВТОРЫ", "RECENT AUTHORS"));
+        userEditContainer.addView(authorsHeader);
+
+        // 1. Current user ("Я (Мои сообщения)")
+        final long myUserId = getMyUserId(currentAccount);
+        final Object myUserObj = getMyUserObject(currentAccount);
+        String myUn = PeerResolver.getPeerUsername(currentAccount, myUserId);
+        String mySub = myUn != null ? "@" + myUn : tr("Вы", "You");
+        View myAvatar = createAvatarView(currentAccount, myUserObj, myUserId, "Я");
+
+        final LinearLayout myRow = createAvatarCheckboxRow(context, tr("Я (Мои сообщения)", "Me (My messages)"), mySub, myAvatar, tempUserId[0] == myUserId, null);
+        myRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                if (tempUserId[0] == myUserId) {
+                    tempUserId[0] = 0;
+                    tempUserName[0] = null;
+                    userEt.setText("");
+                } else {
+                    tempUserId[0] = myUserId;
+                    tempUserName[0] = tr("Мои сообщения", "My messages");
+                    userEt.setText(mySub);
+                }
+                updateAuthorRowChecks.run();
+            }
+        });
+        authorRowViews.put(myUserId, myRow);
+        authorsListLayout.addView(myRow);
+
+        // 2. Recent Dialog Authors
+        List<Long> allDialogIds = PeerResolver.getAllDialogIds(currentAccount);
+        for (final Long did : allDialogIds) {
+            if (did > 0 && did != myUserId) {
+                final String uTitle = PeerResolver.getPeerTitle(context, did);
+                final String uUn = PeerResolver.getPeerUsername(currentAccount, did);
+                String uSub = uUn != null ? "@" + uUn : tr("Пользователь", "User");
+                Object uObj = PeerResolver.getUserOrChatObject(currentAccount, did);
+                View uAvatar = createAvatarView(currentAccount, uObj, did, uTitle);
+
+                final LinearLayout uRow = createAvatarCheckboxRow(context, uTitle, uSub, uAvatar, tempUserId[0] == did, null);
+                uRow.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        performHaptic(v, HapticFeedbackConstants.KEYBOARD_TAP);
+                        if (tempUserId[0] == did) {
+                            tempUserId[0] = 0;
+                            tempUserName[0] = null;
+                            userEt.setText("");
+                        } else {
+                            tempUserId[0] = did;
+                            tempUserName[0] = uTitle;
+                            userEt.setText(uUn != null ? "@" + uUn : uTitle);
+                        }
+                        updateAuthorRowChecks.run();
+                    }
+                });
+                authorRowViews.put(did, uRow);
+                authorsListLayout.addView(uRow);
+            }
+        }
+        userEditContainer.addView(authorsListLayout);
+
+        View.OnClickListener authorClick = new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                int clickedMode = (int) v.getTag();
+                if (clickedMode == AUTHOR_ALL) {
+                    tempAuthorMode[0] = AUTHOR_ALL;
+                    userEditContainer.setVisibility(View.GONE);
+                } else {
+                    if (tempAuthorMode[0] == AUTHOR_ALL) tempAuthorMode[0] = AUTHOR_WHITELIST;
+                    userEditContainer.setVisibility(View.VISIBLE);
+                    updateToggleStyles.run();
+                }
+                for (Map.Entry<Integer, LinearLayout> e : authorRadioRows.entrySet()) {
+                    updateRadioRowStyle(e.getValue(), e.getKey() == clickedMode);
+                }
+            }
+        };
+
+        LinearLayout rAll = createRadioRow(context, tr("Все авторы", "All authors"), tr("Не фильтровать по автору сообщений", "No author filter"), tempAuthorMode[0] == AUTHOR_ALL, authorClick);
+        rAll.setTag(AUTHOR_ALL);
+        authorRadioRows.put(AUTHOR_ALL, rAll);
+        scrollContent.addView(rAll);
+
+        boolean isSpecAuthor = tempAuthorMode[0] != AUTHOR_ALL;
+        LinearLayout rSpecific = createRadioRow(context, tr("Конкретный автор", "Specific author"), tr("Выбрать автора или указать @username / ID", "Specify author or pick from list"), isSpecAuthor, authorClick);
+        rSpecific.setTag(AUTHOR_WHITELIST);
+        authorRadioRows.put(AUTHOR_WHITELIST, rSpecific);
+        scrollContent.addView(rSpecific);
+
+        scrollContent.addView(userEditContainer);
+        contentScroll.addView(scrollContent);
+        sheet.addView(contentScroll);
+
+        // Fixed Action Buttons Row at bottom
+        LinearLayout actionsRow = new LinearLayout(context);
+        actionsRow.setOrientation(LinearLayout.HORIZONTAL);
+        actionsRow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        actionsRow.setPadding(0, dp(14), 0, 0);
+
+        actionsRow.addView(createDialogTextBtn(context, tr("Отмена", "Cancel"), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
+                closeAnim.run();
+            }
+        }));
+
+        actionsRow.addView(createDialogApplyBtn(context, tr("Применить", "Apply"), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                performHaptic(v, HapticFeedbackConstants.VIRTUAL_KEY);
+
+                String typed = userEt.getText() != null ? userEt.getText().toString().trim() : "";
+                if (!typed.isEmpty() && !typed.equals(tempUserName[0])) {
+                    long res = PeerResolver.resolvePeerFromString(currentAccount, typed);
+                    if (res > 0) {
+                        tempUserId[0] = res;
+                        tempUserName[0] = typed;
+                    } else {
+                        tempUserId[0] = 0;
+                        tempUserName[0] = typed;
+                    }
+                }
+
+                if (tempAuthorMode[0] == AUTHOR_ALL || (tempUserId[0] == 0 && (tempUserName[0] == null || tempUserName[0].isEmpty()))) {
+                    authorFilterMode = AUTHOR_ALL;
+                    filterByUserId = 0;
+                    filterByUserName = null;
+                    selectedUserObject = null;
+                    onlyMineSelected = false;
+                } else {
+                    authorFilterMode = tempAuthorMode[0];
+                    filterByUserId = tempUserId[0];
+                    filterByUserName = tempUserName[0];
+                    if (filterByUserId == myUserId) {
+                        selectedUserObject = myUserObj;
+                        onlyMineSelected = (authorFilterMode == AUTHOR_WHITELIST);
+                    } else {
+                        selectedUserObject = PeerResolver.getUserOrChatObject(currentAccount, filterByUserId);
+                        onlyMineSelected = false;
+                    }
+                }
+
+                updateSmartPills();
+                closeAnim.run();
+                triggerSearchDelayed();
+            }
+        }));
+
+        sheet.addView(actionsRow);
+        root.addView(sheet);
+        sheetDialog.setContentView(root);
+
+        sheet.setTranslationY(dp(400) + navHeight);
+        root.setAlpha(0f);
+        sheetDialog.show();
+        root.animate().alpha(1f).setDuration(220).setInterpolator(EASE_OUT_QUINT).start();
+        sheet.animate().translationY(0f).setDuration(220).setInterpolator(EASE_OUT_QUINT).start();
+    }
+
+    private boolean isDialogInArchive(int account, long did) {
+        try {
+            Class<?> mcClass = Class.forName("org.telegram.messenger.MessagesController");
+            Method getInstance = mcClass.getMethod("getInstance", int.class);
+            Object mcInst = getInstance.invoke(null, account);
+
+            // 1. Try dialogs_dict
+            try {
+                Field ddField = mcClass.getField("dialogs_dict");
+                Object dict = ddField.get(mcInst);
+                if (dict != null) {
+                    Method getM = dict.getClass().getMethod("get", long.class);
+                    Object dialog = getM.invoke(dict, did);
+                    if (dialog != null) {
+                        Field fIdField = dialog.getClass().getField("folder_id");
+                        return fIdField.getInt(dialog) == 1;
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            // 2. Try dialogsByFolder (SparseArray)
+            try {
+                Field dbfField = mcClass.getField("dialogsByFolder");
+                Object dbf = dbfField.get(mcInst);
+                if (dbf instanceof android.util.SparseArray) {
+                    android.util.SparseArray<?> sa = (android.util.SparseArray<?>) dbf;
+                    List<?> archDialogs = (List<?>) sa.get(1);
+                    if (archDialogs != null) {
+                        for (Object d : archDialogs) {
+                            if (d != null && d.getClass().getField("id").getLong(d) == did) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            // 3. Try allDialogs
+            try {
+                Field adField = mcClass.getField("allDialogs");
+                List<?> allDialogs = (List<?>) adField.get(mcInst);
+                if (allDialogs != null) {
+                    for (Object d : allDialogs) {
+                        if (d != null && d.getClass().getField("id").getLong(d) == did) {
+                            Field fIdField = d.getClass().getField("folder_id");
+                            return fIdField.getInt(d) == 1;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+        private boolean isDialogInFolder(int currentAccount, int targetFolderId, long did) {
+        if (targetFolderId <= 0) return true;
+        if (targetFolderId == 1) {
+            return isDialogInArchive(currentAccount, did);
+        }
+        try {
+            Class<?> mcClass = Class.forName("org.telegram.messenger.MessagesController");
+            Method getInstance = mcClass.getMethod("getInstance", int.class);
+            Object mcInst = getInstance.invoke(null, currentAccount);
+            Field dfF = mcClass.getField("dialogFilters");
+            List<?> dfs = (List<?>) dfF.get(mcInst);
+            if (dfs != null) {
+                for (Object f : dfs) {
+                    if (f != null) {
+                        Field idF = f.getClass().getField("id");
+                        if (idF.getInt(f) == targetFolderId) {
+                            return isDialogInFilter(f, currentAccount, did);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return true;
+    }
+
+    private static boolean isDialogInFilter(Object filterObj, int account, long did) {
+        if (filterObj == null) return true;
+        try {
+            Method[] methods = filterObj.getClass().getMethods();
+            for (Method m : methods) {
+                if ("includesDialog".equals(m.getName())) {
+                    Class<?>[] params = m.getParameterTypes();
+                    if (params.length == 2) {
+                        if (params[0] == int.class && params[1] == long.class) {
+                            return (boolean) m.invoke(filterObj, account, did);
+                        }
+                        if (params[1] == long.class) {
+                            try {
+                                Class<?> aiClass = Class.forName("org.telegram.messenger.AccountInstance");
+                                Method aiGet = aiClass.getMethod("getInstance", int.class);
+                                Object aiInst = aiGet.invoke(null, account);
+                                return (boolean) m.invoke(filterObj, aiInst, did);
+                            } catch (Throwable ignored) {}
+                        }
+                    } else if (params.length == 1 && params[0] == long.class) {
+                        return (boolean) m.invoke(filterObj, did);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return true;
+    }
+
     private void resetAllFilters() {
         selectedFilter = "all";
         selectedVideoSort = "date";
@@ -3441,11 +5156,25 @@ public class AdvancedSearchDialog {
         filterByUserAccessHash = 0;
         selectedUserObject = null;
         filterByUserName = null;
+
+        // Reset Variant 1 Smart filters
+        chatScopeMode = (peerId != 0) ? SCOPE_THIS_CHAT : SCOPE_ALL_CHATS;
+        scope = (chatScopeMode == SCOPE_THIS_CHAT) ? "chat" : "global";
+        selectedChatIds.clear();
+        selectedChatTitles.clear();
+        selectedFolderIds.clear();
+        selectedFolderNames.clear();
+        selectedFolderId = 0;
+        selectedFolderName = null;
+        folderFilterMode = FOLDER_ALL;
+        archiveFilterMode = ARCHIVE_EXCLUDE;
+        authorFilterMode = AUTHOR_ALL;
+
         updateFilterStyles();
         updateDateStyles();
         updateVideoSortStyles();
         updateDocSubStyles();
-        updateOnlyMineChipStyle();
+        updateSmartPills();
         updateUserFilterChip();
         TextView customChip = dateChipViews.get("custom");
         if (customChip != null) {
@@ -3953,8 +5682,10 @@ public class AdvancedSearchDialog {
             cancelActiveRequests(currentAccount);
         }
 
-        if ("chat".equals(scope) && peerId != 0) {
+        if (chatScopeMode == SCOPE_THIS_CHAT && peerId != 0) {
             performChatSearch(token, currentAccount, minDate, maxDate, isLoadMore);
+        } else if (chatScopeMode == SCOPE_WHITELIST && !selectedChatIds.isEmpty()) {
+            performWhitelistSearch(token, currentAccount, minDate, maxDate, isLoadMore);
         } else {
             performGlobalSearch(token, currentAccount, minDate, maxDate, isLoadMore);
         }
@@ -4173,6 +5904,107 @@ public class AdvancedSearchDialog {
         }
     }
 
+    private void performWhitelistSearch(final int token, final int currentAccount, final long minDate, final long maxDate, final boolean isLoadMore) {
+        try {
+            final List<Object> mergedMsgs = Collections.synchronizedList(new ArrayList<>());
+            final List<Object> mergedUsers = Collections.synchronizedList(new ArrayList<>());
+            final List<Object> mergedChats = Collections.synchronizedList(new ArrayList<>());
+
+            final List<Long> targets = new ArrayList<>(selectedChatIds);
+            if (targets.isEmpty()) {
+                renderResults(currentAccount, null, null, isLoadMore);
+                return;
+            }
+
+            final int totalRequests = targets.size();
+            final AtomicInteger finishedRequests = new AtomicInteger(0);
+
+            final Runnable onComplete = new Runnable() {
+                @Override
+                public void run() {
+                    if (finishedRequests.incrementAndGet() >= totalRequests) {
+                        mainHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (token == currentToken) {
+                                    try {
+                                        Class<?> resClass = Class.forName("org.telegram.tgnet.TLRPC$TL_messages_messagesSlice");
+                                        Object syntheticResponse = resClass.newInstance();
+                                        resClass.getField("messages").set(syntheticResponse, new ArrayList<>(mergedMsgs));
+                                        resClass.getField("users").set(syntheticResponse, new ArrayList<>(mergedUsers));
+                                        resClass.getField("chats").set(syntheticResponse, new ArrayList<>(mergedChats));
+                                        resClass.getField("count").set(syntheticResponse, mergedMsgs.size());
+                                        renderResults(currentAccount, syntheticResponse, null, isLoadMore);
+                                    } catch (Throwable t) {
+                                        renderResults(currentAccount, null, null, isLoadMore);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            };
+
+            Class<?> cmClass = Class.forName("org.telegram.tgnet.ConnectionsManager");
+            Method cmGetInstance = cmClass.getMethod("getInstance", int.class);
+            final Object cmInst = cmGetInstance.invoke(null, currentAccount);
+            final Class<?> reqDelClass = Class.forName("org.telegram.tgnet.RequestDelegate");
+            final Method sendReq = cmClass.getMethod("sendRequest", Class.forName("org.telegram.tgnet.TLObject"), reqDelClass);
+            Class<?> reqClass = Class.forName("org.telegram.tgnet.TLRPC$TL_messages_search");
+
+            for (final Long targetPeer : targets) {
+                Object req = reqClass.newInstance();
+                Object inputPeer = createInputPeer(currentAccount, targetPeer, 0, null);
+                Object filterObj = createFilter(selectedFilter);
+
+                reqClass.getField("peer").set(req, inputPeer);
+                reqClass.getField("q").set(req, query != null ? query : "");
+                reqClass.getField("filter").set(req, filterObj);
+                reqClass.getField("min_date").set(req, (int) minDate);
+                reqClass.getField("max_date").set(req, (int) maxDate);
+                reqClass.getField("offset_id").set(req, 0);
+                reqClass.getField("add_offset").set(req, 0);
+                reqClass.getField("limit").set(req, 100);
+                reqClass.getField("max_id").set(req, 0);
+                reqClass.getField("min_id").set(req, 0);
+                reqClass.getField("hash").set(req, 0L);
+
+                Object delegate = Proxy.newProxyInstance(
+                    reqDelClass.getClassLoader(),
+                    new Class<?>[]{reqDelClass},
+                    new InvocationHandler() {
+                        @Override
+                        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                            if ("run".equals(method.getName()) && args != null && args.length >= 2) {
+                                Object response = args[0];
+                                Object error = args[1];
+                                if (response != null && error == null) {
+                                    try {
+                                        Field mF = response.getClass().getField("messages");
+                                        List<?> ms = (List<?>) mF.get(response);
+                                        if (ms != null) mergedMsgs.addAll(ms);
+                                        Field uF = response.getClass().getField("users");
+                                        List<?> us = (List<?>) uF.get(response);
+                                        if (us != null) mergedUsers.addAll(us);
+                                        Field cF = response.getClass().getField("chats");
+                                        List<?> cs = (List<?>) cF.get(response);
+                                        if (cs != null) mergedChats.addAll(cs);
+                                    } catch (Throwable ignored) {}
+                                }
+                                onComplete.run();
+                            }
+                            return null;
+                        }
+                    }
+                );
+
+                sendReq.invoke(cmInst, req, delegate);
+            }
+        } catch (Throwable t) {
+            renderResults(currentAccount, null, null, isLoadMore);
+        }
+    }
+
     private void performGlobalSearch(final int token, final int currentAccount, final long minDate, final long maxDate, final boolean isLoadMore) {
         try {
             final List<Object> mergedMsgs = Collections.synchronizedList(new ArrayList<>());
@@ -4209,7 +6041,7 @@ public class AdvancedSearchDialog {
                 }
             }
 
-            final int totalRequests = 1 + searchPeers.size();
+            final int totalRequests = (archiveFilterMode == ARCHIVE_INCLUDE ? 2 : 1) + searchPeers.size();
             final AtomicInteger finishedRequests = new AtomicInteger(0);
 
             final Runnable onComplete = new Runnable() {
@@ -4245,7 +6077,8 @@ public class AdvancedSearchDialog {
 
             Object inputPeer = createInputPeer(currentAccount, 0L, 0, null);
 
-            reqClass.getField("folder_id").set(req, 0);
+            int primaryFolderId = (archiveFilterMode == ARCHIVE_ONLY) ? 1 : 0;
+            reqClass.getField("folder_id").set(req, primaryFolderId);
             reqClass.getField("q").set(req, query != null ? query : "");
             reqClass.getField("filter").set(req, filterObj);
             reqClass.getField("min_date").set(req, (int) minDate);
@@ -4318,6 +6151,27 @@ public class AdvancedSearchDialog {
                 synchronized (activeReqIds) {
                     activeReqIds.add((Integer) gReqId);
                 }
+            }
+
+            if (archiveFilterMode == ARCHIVE_INCLUDE) {
+                try {
+                    Object reqArch = reqClass.newInstance();
+                    reqClass.getField("folder_id").set(reqArch, 1);
+                    reqClass.getField("q").set(reqArch, query != null ? query : "");
+                    reqClass.getField("filter").set(reqArch, filterObj);
+                    reqClass.getField("min_date").set(reqArch, (int) minDate);
+                    reqClass.getField("max_date").set(reqArch, (int) maxDate);
+                    reqClass.getField("offset_rate").set(reqArch, 0);
+                    reqClass.getField("offset_peer").set(reqArch, inputPeer);
+                    reqClass.getField("offset_id").set(reqArch, 0);
+                    reqClass.getField("limit").set(reqArch, 50);
+                    Object aReqId = sendReq.invoke(cmInst, reqArch, delegate);
+                    if (aReqId instanceof Integer && (Integer) aReqId != 0) {
+                        synchronized (activeReqIds) {
+                            activeReqIds.add((Integer) aReqId);
+                        }
+                    }
+                } catch (Throwable ignoredArch) {}
             }
 
             for (Long targetP : searchPeers) {
@@ -6067,30 +7921,68 @@ public class AdvancedSearchDialog {
                     senderTitle = PeerResolver.getPeerTitle(context, senderPeerId);
                 }
 
-                if (filterByUserId != 0) {
-                    boolean authorMatches = false;
-                    if (isOutMsg) {
-                        authorMatches = (filterByUserId == myUserId);
-                    } else {
-                        authorMatches = (senderPeerId == filterByUserId) || (authorResolvedId != 0 && authorResolvedId == filterByUserId);
-                        if (!authorMatches && senderPeerId == 0 && msgPeerId > 0) {
-                            authorMatches = (msgPeerId == filterByUserId);
+                // Scope check (Whitelist / Blacklist / This chat)
+                if (chatScopeMode == SCOPE_THIS_CHAT && peerId != 0) {
+                    if (msgPeerId != peerId) continue;
+                } else if (chatScopeMode == SCOPE_WHITELIST && !selectedChatIds.isEmpty()) {
+                    if (!selectedChatIds.contains(msgPeerId)) continue;
+                } else if (chatScopeMode == SCOPE_BLACKLIST && !selectedChatIds.isEmpty()) {
+                    if (selectedChatIds.contains(msgPeerId)) continue;
+                }
+
+                // Folder filter check (Whitelist / Blacklist)
+                if (folderFilterMode != FOLDER_ALL && !selectedFolderIds.isEmpty()) {
+                    boolean matchFolder = false;
+                    for (int fid : selectedFolderIds) {
+                        if (isDialogInFolder(currentAccount, fid, msgPeerId)) {
+                            matchFolder = true;
+                            break;
                         }
                     }
-                    if (!authorMatches && filterByUserName != null && !filterByUserName.isEmpty() && (!isOutMsg || filterByUserId == myUserId)) {
-                        String cleanTag = filterByUserName.startsWith("@") ? filterByUserName.substring(1).toLowerCase(Locale.ROOT) : filterByUserName.toLowerCase(Locale.ROOT);
-                        if (authorUsername != null && (authorUsername.equalsIgnoreCase(cleanTag) || authorUsername.toLowerCase(Locale.ROOT).contains(cleanTag))) {
-                            authorMatches = true;
-                        }
-                        if (!authorMatches && senderTitle != null && senderTitle.toLowerCase(Locale.ROOT).contains(cleanTag)) {
-                            authorMatches = true;
-                        }
-                    }
-                    if (!authorMatches) {
+                    if (folderFilterMode == FOLDER_WHITELIST && !matchFolder) {
+                        continue;
+                    } else if (folderFilterMode == FOLDER_BLACKLIST && matchFolder) {
                         continue;
                     }
                 }
 
+                // Archive filter check
+                if (archiveFilterMode == ARCHIVE_EXCLUDE) {
+                    if (isDialogInArchive(currentAccount, msgPeerId)) {
+                        continue;
+                    }
+                } else if (archiveFilterMode == ARCHIVE_ONLY) {
+                    if (!isDialogInArchive(currentAccount, msgPeerId)) {
+                        continue;
+                    }
+                }
+
+                // Variant 1: Author filter check
+                boolean isMe = isOutMsg || (senderPeerId != 0 && senderPeerId == myUserId);
+                if (authorFilterMode != AUTHOR_ALL) {
+                    boolean authorMatches = false;
+                    if (filterByUserId != 0) {
+                        if (filterByUserId == myUserId) {
+                            authorMatches = isMe;
+                        } else {
+                            authorMatches = (senderPeerId == filterByUserId || authorResolvedId == filterByUserId || (senderPeerId == 0 && msgPeerId == filterByUserId));
+                        }
+                    } else if (filterByUserName != null && !filterByUserName.isEmpty()) {
+                        String cleanFilter = filterByUserName.startsWith("@") ? filterByUserName.substring(1).toLowerCase(Locale.ROOT) : filterByUserName.toLowerCase(Locale.ROOT);
+                        String sUn = PeerResolver.getPeerUsername(currentAccount, senderPeerId);
+                        if (sUn != null && (sUn.equalsIgnoreCase(cleanFilter) || sUn.toLowerCase(Locale.ROOT).contains(cleanFilter))) {
+                            authorMatches = true;
+                        }
+                        if (!authorMatches && senderTitle != null && senderTitle.toLowerCase(Locale.ROOT).contains(cleanFilter)) {
+                            authorMatches = true;
+                        }
+                    }
+                    if (authorFilterMode == AUTHOR_WHITELIST && !authorMatches) {
+                        continue;
+                    } else if (authorFilterMode == AUTHOR_BLACKLIST && authorMatches) {
+                        continue;
+                    }
+                }
                 String itemKey = msgPeerId + "_" + msgId;
                 if (loadedMessageKeys.contains(itemKey)) continue;
                 loadedMessageKeys.add(itemKey);
@@ -7353,6 +9245,8 @@ public class AdvancedSearchDialog {
                 filterByUserAccessHash = accessHash;
                 selectedUserObject = userOrChat;
                 filterByUserName = (username != null && !username.isEmpty()) ? (username.startsWith("@") ? username : ("@" + username)) : displayName;
+                authorFilterMode = AUTHOR_ONLY_USER;
+                updateSmartPills();
                 updateUserFilterChip();
                 triggerSearchDelayed();
             }
